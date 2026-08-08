@@ -116,6 +116,20 @@ This node expands `H3 Context` into the standard workflow outputs:
 - Audio VAE;
 - FPS.
 
+The output node also has an optional `Optimized prompt` input. For Prompt
+Assistant integration, connect the workflow as follows:
+
+1. Fan out `MiniMax H3 Easy.H3 Context` to both
+   `Multimedia Reference Fusion Prompt.H3 Context` and
+   `MiniMax H3 Easy Output.H3 Context`.
+2. Connect `Multimedia Reference Fusion Prompt.Fusion Prompt` to
+   `MiniMax H3 Easy Output.Optimized prompt`.
+3. The fusion node reuses the original prompt, mode, and ordered media; the
+   output node then re-encodes Conditioning with the optimized result.
+
+When `Optimized prompt` is not connected, the original Conditioning is used
+unchanged, preserving existing workflows.
+
 The sampler, acceleration nodes, video/audio processing, and save nodes remain
 outside the main node so the workflow stays compatible with the rest of
 ComfyUI.

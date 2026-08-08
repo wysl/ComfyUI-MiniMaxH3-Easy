@@ -14,7 +14,7 @@ import sys
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import lru_cache, partial
 from typing import Any
 
 import torch
@@ -414,6 +414,46 @@ class MiniMaxH3Context:
     video_vae: Any
     audio_vae: Any
     fps: float
+    prompt: str = ""
+    mode: str = MODE_IMAGE
+    media: tuple[tuple[str, Any], ...] = ()
+    keyframe_roles: tuple[str, ...] = ()
+    _prompt_encoder: Any = None
+
+    def prompt_assistant_payload(self) -> dict[str, Any]:
+        """Expose the original generation inputs without importing either plugin."""
+        synchronized_audios = []
+        synchronized_audio_video_indices = []
+        video_index = 0
+        for media_type, value in self.media:
+            if media_type != "video":
+                continue
+            video_index += 1
+            try:
+                _frames, soundtrack, _fps = _video_parts(value)
+            except (TypeError, ValueError, AttributeError):
+                soundtrack = None
+            if soundtrack is not None:
+                synchronized_audios.append(soundtrack)
+                synchronized_audio_video_indices.append(video_index)
+        standalone_audios = [
+            value for media_type, value in self.media if media_type == "audio"
+        ]
+        return {
+            "prompt": self.prompt,
+            "mode": self.mode,
+            "images": [value for media_type, value in self.media if media_type == "image"],
+            "videos": [value for media_type, value in self.media if media_type == "video"],
+            "audios": [*synchronized_audios, *standalone_audios],
+            "synchronized_audio_count": len(synchronized_audios),
+            "synchronized_audio_video_indices": synchronized_audio_video_indices,
+            "keyframe_roles": list(self.keyframe_roles),
+        }
+
+    def encode_prompt(self, prompt: str):
+        if not callable(self._prompt_encoder):
+            raise ValueError("This H3 Context cannot encode a replacement prompt")
+        return self._prompt_encoder(str(prompt))
 
 
 @dataclass(frozen=True)
@@ -581,7 +621,16 @@ def _empty_image_conditioning(bundle, prompt, width, height, length, first_frame
     return conditioning, latent
 
 
-def _reference_conditioning(bundle, prompt, width, height, length, ref_image_size, items: list[_MediaInput]):
+def _reference_conditioning(
+    bundle,
+    prompt,
+    width,
+    height,
+    length,
+    ref_image_size,
+    items: list[_MediaInput],
+    return_prompt: bool = False,
+):
     latent, frame_count = h3._empty_av_latent(width, height, length)
     ref_items = []
     ref_blocks = []
@@ -673,6 +722,8 @@ def _reference_conditioning(bundle, prompt, width, height, length, ref_image_siz
     tokens = bundle.clip.tokenize(resolved_prompt, minimax_ref_items=ref_items)
     conditioning = bundle.clip.encode_from_tokens_scheduled(tokens)
     conditioning = node_helpers.conditioning_set_values(conditioning, {"minimax_refs": ref_blocks})
+    if return_prompt:
+        return conditioning, latent, resolved_prompt
     return conditioning, latent
 
 
@@ -767,17 +818,64 @@ class MiniMaxH3Easy:
             if counts["image"] == 0 and counts["video"] == 0:
                 raise ValueError("Reference mode needs an image or video in addition to audio")
             model = h3_bundle.model_for("ref2va")
-            conditioning, latent = _reference_conditioning(h3_bundle, prompt, width, height, length, ref_image_size, items)
+            conditioning, latent, context_prompt = _reference_conditioning(
+                h3_bundle,
+                prompt,
+                width,
+                height,
+                length,
+                ref_image_size,
+                items,
+                return_prompt=True,
+            )
+            context_mode = MODE_REFERENCE
+            context_media = tuple((item.media_type, item.value) for item in items)
+            keyframe_roles = ()
+            prompt_encoder = partial(
+                _reference_conditioning,
+                h3_bundle,
+                width=width,
+                height=height,
+                length=length,
+                ref_image_size=ref_image_size,
+                items=items,
+            )
         else:
             first_frame, last_frame = cls._keyframes(items, keyframe_role)
             model = h3_bundle.model_for("fl2va")
             conditioning, latent = _empty_image_conditioning(h3_bundle, prompt, width, height, length, first_frame, last_frame)
+            context_mode = MODE_IMAGE
+            context_media_items = []
+            keyframe_role_items = []
+            if first_frame is not None:
+                context_media_items.append(("image", first_frame))
+                keyframe_role_items.append(KEYFRAME_FIRST)
+            if last_frame is not None:
+                context_media_items.append(("image", last_frame))
+                keyframe_role_items.append(KEYFRAME_LAST)
+            context_media = tuple(context_media_items)
+            keyframe_roles = tuple(keyframe_role_items)
+            prompt_encoder = partial(
+                _empty_image_conditioning,
+                h3_bundle,
+                width=width,
+                height=height,
+                length=length,
+                first_frame=first_frame,
+                last_frame=last_frame,
+            )
+            context_prompt = str(prompt or "")
         context = MiniMaxH3Context(
             conditioning=conditioning,
             latent=latent,
             video_vae=h3_bundle.video_vae,
             audio_vae=h3_bundle.audio_vae,
             fps=float(fps),
+            prompt=context_prompt,
+            mode=context_mode,
+            media=context_media,
+            keyframe_roles=keyframe_roles,
+            _prompt_encoder=prompt_encoder,
         )
         return model, context
 
@@ -795,15 +893,27 @@ class MiniMaxH3EasyOutput:
             "required": {
                 "h3_context": ("MINIMAX_H3_CONTEXT",),
             },
+            "optional": {
+                "optimized_prompt": ("STRING", {"forceInput": True}),
+            },
         }
 
     @staticmethod
-    def unpack(h3_context):
+    def unpack(h3_context, optimized_prompt=None):
         if not isinstance(h3_context, MiniMaxH3Context):
             raise ValueError("Connect the H3 Context output from a MiniMax H3 Easy node")
+        while isinstance(optimized_prompt, (list, tuple)):
+            optimized_prompt = optimized_prompt[0] if optimized_prompt else None
+        conditioning = h3_context.conditioning
+        latent = h3_context.latent
+        if optimized_prompt is not None:
+            optimized_prompt = str(optimized_prompt).strip()
+            if not optimized_prompt:
+                raise ValueError("The connected optimized prompt is empty")
+            conditioning, latent = h3_context.encode_prompt(optimized_prompt)
         return (
-            h3_context.conditioning,
-            h3_context.latent,
+            conditioning,
+            latent,
             h3_context.video_vae,
             h3_context.audio_vae,
             h3_context.fps,

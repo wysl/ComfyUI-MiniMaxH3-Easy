@@ -100,6 +100,14 @@ FL2VA，参考生视频优先使用 Ref2VA。两种主模型不能同时设置�
 - Audio VAE；
 - FPS。
 
+输出节点还提供可选的 `优化后的提示词` 输入。与 Prompt Assistant 配合时，按以下方式连接：
+
+1. `MiniMax H3 Easy.H3 Context` 同时连接到 `✨多媒体参考融合提示词.H3 Context` 和 `MiniMax H3 Easy Output.H3 Context`；
+2. `✨多媒体参考融合提示词.融合提示词` 连接到 `MiniMax H3 Easy Output.优化后的提示词`；
+3. 融合节点会自动读取原提示词、生成模式和有序媒体，输出节点再用优化结果重新编码 Conditioning。
+
+不连接 `优化后的提示词` 时，输出节点继续使用主节点原先生成的 Conditioning，旧工作流行为不变。
+
 采样器、加速节点、视频/音频处理和保存节点仍然放在外部，方便继续使用 ComfyUI 生态中的其他节点。
 
 ## 模式

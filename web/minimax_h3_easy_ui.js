@@ -67,6 +67,7 @@ const TEXT = {
     outputAudioVae: "Audio VAE",
     outputFps: "FPS",
     outputContext: "H3 Context",
+    optimizedPrompt: ZH_BROWSER ? "\u4f18\u5316\u540e\u7684\u63d0\u793a\u8bcd" : "Optimized prompt",
     inputMedia: "Media",
 };
 const OPTION_DEFS = {
@@ -250,6 +251,7 @@ function localizeNodeInstance(node) {
         node.title = TEXT.outputTitle;
         for (const input of node.inputs || []) {
             if (input.name === "h3_context") setLocalizedSlotLabel(input, TEXT.outputContext);
+            if (input.name === "optimized_prompt") setLocalizedSlotLabel(input, TEXT.optimizedPrompt);
         }
         const outputLabels = { positive: TEXT.outputConditioning, latent: TEXT.outputLatent, video_vae: TEXT.outputVideoVae, audio_vae: TEXT.outputAudioVae, fps: TEXT.outputFps };
         for (const output of node.outputs || []) {
