@@ -24,6 +24,8 @@ import comfy.model_management
 import folder_paths
 import node_helpers
 import nodes
+from comfy.cli_args import args
+from comfy_api.latest import Types
 from comfy_extras import nodes_minimax_h3 as h3
 
 
@@ -920,8 +922,126 @@ class MiniMaxH3EasyOutput:
         )
 
 
+def _per_second_frame_indices(seconds: float, frame_count: int) -> list[int]:
+    seconds = float(seconds)
+    frame_count = int(frame_count)
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise ValueError("Video seconds must be greater than zero")
+    if frame_count <= 0:
+        raise ValueError("Video frame count must be greater than zero")
+
+    return [
+        min(frame_count - 1, math.floor(second * frame_count / seconds))
+        for second in range(math.ceil(seconds))
+    ]
+
+
+def _extract_video_output_frames(frames, seconds: float, frame_count: int):
+    actual_frame_count = int(frames.shape[0])
+    if actual_frame_count <= 0:
+        raise ValueError("The connected video contains no frames")
+    if int(frame_count) != actual_frame_count:
+        raise ValueError(
+            f"The frame_count input is {int(frame_count)}, but the actual video frame count is "
+            f"{actual_frame_count}. Connect the matching frame count to avoid incorrect extraction."
+        )
+
+    indexes = _per_second_frame_indices(seconds, actual_frame_count)
+    return frames[indexes], frames[-1:]
+
+
+class MiniMaxH3EasySaveVideo:
+    CATEGORY = "MiniMax H3 Easy"
+    FUNCTION = "save"
+    RETURN_TYPES = ("VIDEO", "IMAGE", "IMAGE")
+    RETURN_NAMES = ("video", "frames_per_second", "last_frame")
+    OUTPUT_NODE = True
+    DESCRIPTION = (
+        "Save a ComfyUI VIDEO with a manually resizable preview, and output the first "
+        "frame of each second plus the video's actual last frame."
+    )
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "video": ("VIDEO",),
+                "seconds": ("FLOAT", {"default": 5.0, "min": 0.01, "max": 86400.0, "step": 0.01}),
+                "frame_count": ("INT", {"default": 121, "min": 1, "max": 2147483647, "step": 1}),
+                "filename_prefix": (
+                    "STRING",
+                    {"default": "video/MiniMaxH3", "multiline": False},
+                ),
+                "format": (["auto", "mp4"], {"default": "auto"}),
+                "codec": (["auto", "h264"], {"default": "auto"}),
+            },
+            "hidden": {
+                "prompt": "PROMPT",
+                "extra_pnginfo": "EXTRA_PNGINFO",
+            },
+        }
+
+    @staticmethod
+    def save(
+        video,
+        seconds,
+        frame_count,
+        filename_prefix,
+        format,
+        codec,
+        prompt=None,
+        extra_pnginfo=None,
+    ):
+        components = video.get_components()
+        sampled_frames, last_frame = _extract_video_output_frames(
+            components.images,
+            seconds,
+            frame_count,
+        )
+
+        width, height = video.get_dimensions()
+        full_output_folder, filename, counter, subfolder, _ = folder_paths.get_save_image_path(
+            filename_prefix,
+            folder_paths.get_output_directory(),
+            width,
+            height,
+        )
+        metadata = None
+        if not args.disable_metadata:
+            metadata_items = {}
+            if extra_pnginfo is not None:
+                metadata_items.update(extra_pnginfo)
+            if prompt is not None:
+                metadata_items["prompt"] = prompt
+            if metadata_items:
+                metadata = metadata_items
+
+        extension = Types.VideoContainer.get_extension(format)
+        output_file = f"{filename}_{counter:05}_.{extension}"
+        video.save_to(
+            os.path.join(full_output_folder, output_file),
+            format=Types.VideoContainer(format),
+            codec=str(codec),
+            metadata=metadata,
+        )
+
+        return {
+            "ui": {
+                "h3_saved_video": [
+                    {
+                        "filename": output_file,
+                        "subfolder": subfolder,
+                        "type": "output",
+                    }
+                ]
+            },
+            "result": (video, sampled_frames, last_frame),
+        }
+
+
 NODE_CLASS_MAPPINGS = {
     "MiniMaxH3EasyLoader": MiniMaxH3EasyLoader,
     "MiniMaxH3Easy": MiniMaxH3Easy,
     "MiniMaxH3EasyOutput": MiniMaxH3EasyOutput,
+    "MiniMaxH3EasySaveVideo": MiniMaxH3EasySaveVideo,
 }

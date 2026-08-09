@@ -1,8 +1,10 @@
 import { app } from "../../scripts/app.js";
+import { api } from "../../scripts/api.js";
 
 const NODE_CLASS = "MiniMaxH3Easy";
 const LOADER_CLASS = "MiniMaxH3EasyLoader";
 const OUTPUT_CLASS = "MiniMaxH3EasyOutput";
+const SAVE_CLASS = "MiniMaxH3EasySaveVideo";
 const LINKS_PROP = "minimax_h3_virtual_media_links";
 const PROMPT_DOC_PROP = "minimax_h3_prompt_reference_doc";
 const RUNTIME_REF_PREFIX = "__MINIMAX_H3_REF_";
@@ -38,6 +40,7 @@ const TEXT = {
     mainTitle: "MiniMax H3 Easy",
     loaderTitle: ZH_BROWSER ? "MiniMax H3 Easy \u52a0\u8f7d\u5668" : "MiniMax H3 Easy Loader",
     outputTitle: ZH_BROWSER ? "MiniMax H3 Easy \u8f93\u51fa" : "MiniMax H3 Easy Output",
+    saveTitle: ZH_BROWSER ? "MiniMax H3 Easy \u4fdd\u5b58\u89c6\u9891" : "MiniMax H3 Easy Save Video",
     category: "MiniMax H3 Easy",
     mode: ZH_BROWSER ? "\u6a21\u5f0f" : "Mode",
     prompt: ZH_BROWSER ? "\u63d0\u793a\u8bcd" : "Prompt",
@@ -69,6 +72,16 @@ const TEXT = {
     outputContext: "H3 Context",
     optimizedPrompt: ZH_BROWSER ? "\u4f18\u5316\u540e\u7684\u63d0\u793a\u8bcd" : "Optimized prompt",
     inputMedia: "Media",
+    saveVideoInput: ZH_BROWSER ? "\u89c6\u9891" : "Video",
+    saveSeconds: ZH_BROWSER ? "\u89c6\u9891\u79d2\u6570" : "Video seconds",
+    saveFrameCount: ZH_BROWSER ? "\u603b\u5e27\u6570" : "Total frames",
+    filenamePrefix: ZH_BROWSER ? "\u6587\u4ef6\u540d\u524d\u7f00" : "Filename prefix",
+    saveFormat: ZH_BROWSER ? "\u5c01\u88c5\u683c\u5f0f" : "Container format",
+    saveCodec: ZH_BROWSER ? "\u7f16\u7801\u5668" : "Codec",
+    framesPerSecond: ZH_BROWSER ? "\u6bcf\u79d2\u7b2c\u4e00\u5e27" : "First frame of each second",
+    lastFrame: ZH_BROWSER ? "\u6700\u540e\u4e00\u5e27" : "Last frame",
+    previewWaiting: ZH_BROWSER ? "\u6267\u884c\u540e\u663e\u793a\u4fdd\u5b58\u7684\u89c6\u9891" : "Saved video appears after execution",
+    previewError: ZH_BROWSER ? "\u65e0\u6cd5\u52a0\u8f7d\u5df2\u4fdd\u5b58\u7684\u89c6\u9891" : "Unable to load the saved video",
 };
 const OPTION_DEFS = {
     mode: {
@@ -192,6 +205,10 @@ function isOutput(node) {
     return String(node?.comfyClass || node?.type || node?.constructor?.nodeData?.name || "") === OUTPUT_CLASS;
 }
 
+function isSaveVideo(node) {
+    return String(node?.comfyClass || node?.type || node?.constructor?.nodeData?.name || "") === SAVE_CLASS;
+}
+
 function canonicalOption(name, value) {
     const raw = String(value ?? "");
     const alias = OPTION_ALIASES[name]?.[raw];
@@ -247,6 +264,33 @@ function localizeNodeInstance(node) {
         for (const input of node.inputs || []) if (labels[input.name]) setLocalizedSlotLabel(input, labels[input.name]);
         return;
     }
+    if (isSaveVideo(node)) {
+        node.title = TEXT.saveTitle;
+        const labels = {
+            video: TEXT.saveVideoInput,
+            seconds: TEXT.saveSeconds,
+            frame_count: TEXT.saveFrameCount,
+            filename_prefix: TEXT.filenamePrefix,
+            format: TEXT.saveFormat,
+            codec: TEXT.saveCodec,
+        };
+        for (const widget of node.widgets || []) {
+            if (labels[widget.name]) widget.label = labels[widget.name];
+        }
+        for (const input of node.inputs || []) {
+            if (labels[input.name]) setLocalizedSlotLabel(input, labels[input.name]);
+        }
+        const outputLabels = {
+            video: TEXT.saveVideoInput,
+            frames_per_second: TEXT.framesPerSecond,
+            last_frame: TEXT.lastFrame,
+        };
+        for (const output of node.outputs || []) {
+            const key = String(output.name || "").toLowerCase();
+            if (outputLabels[key]) setLocalizedSlotLabel(output, outputLabels[key]);
+        }
+        return;
+    }
     if (isOutput(node)) {
         node.title = TEXT.outputTitle;
         for (const input of node.inputs || []) {
@@ -279,9 +323,11 @@ function localizeNodeInstance(node) {
 }
 
 function localizeNodeDefinition(nodeData) {
-    if (!nodeData || ![NODE_CLASS, LOADER_CLASS, OUTPUT_CLASS].includes(nodeData.name)) return;
+    if (!nodeData || ![NODE_CLASS, LOADER_CLASS, OUTPUT_CLASS, SAVE_CLASS].includes(nodeData.name)) return;
     nodeData.display_name = nodeData.name === LOADER_CLASS
         ? TEXT.loaderTitle
+        : nodeData.name === SAVE_CLASS
+            ? TEXT.saveTitle
         : nodeData.name === OUTPUT_CLASS
             ? TEXT.outputTitle
             : TEXT.mainTitle;
@@ -3946,6 +3992,126 @@ function installOutputNode(nodeType, nodeData) {
     };
 }
 
+function savedVideoUrl(file) {
+    if (!file?.filename) return "";
+    const params = new URLSearchParams();
+    params.set("filename", String(file.filename));
+    if (file.subfolder) params.set("subfolder", String(file.subfolder));
+    params.set("type", String(file.type || "output"));
+    params.set("t", String(Date.now()));
+    return api.apiURL(`/view?${params.toString()}`);
+}
+
+function setSaveVideoPreview(node, file) {
+    const video = node?.__h3SaveVideoElement;
+    const message = node?.__h3SaveVideoMessage;
+    if (!video || !message) return;
+    const url = savedVideoUrl(file);
+    video.pause?.();
+    if (!url) {
+        video.removeAttribute("src");
+        video.load?.();
+        video.hidden = true;
+        message.hidden = false;
+        message.textContent = TEXT.previewWaiting;
+        return;
+    }
+    message.hidden = true;
+    video.hidden = false;
+    video.src = url;
+    video.load?.();
+}
+
+function ensureSaveVideoPreview(node) {
+    if (!node || node.__h3SaveVideoWidget || typeof node.addDOMWidget !== "function") return;
+    node.hideOutputImages = true;
+
+    const wrap = document.createElement("div");
+    wrap.className = "h3-save-video-wrap";
+    const video = document.createElement("video");
+    video.className = "h3-save-video-preview";
+    video.controls = true;
+    video.loop = true;
+    video.playsInline = true;
+    video.preload = "metadata";
+    video.hidden = true;
+    const message = document.createElement("div");
+    message.className = "h3-save-video-message";
+    message.textContent = TEXT.previewWaiting;
+    video.addEventListener("error", () => {
+        video.hidden = true;
+        message.hidden = false;
+        message.textContent = TEXT.previewError;
+    });
+    video.addEventListener("loadeddata", () => {
+        message.hidden = true;
+        video.hidden = false;
+    });
+    wrap.append(video, message);
+
+    const widget = node.addDOMWidget("h3_saved_video_preview", "h3_saved_video_preview", wrap, {
+        serialize: false,
+        hideOnZoom: false,
+        canvasOnly: false,
+        getMinHeight: () => 64,
+        afterResize: () => node.setDirtyCanvas?.(true, true),
+    });
+    if (!widget) {
+        wrap.remove();
+        return;
+    }
+    widget.serialize = false;
+    setWidgetOption(widget, "serialize", false);
+    setWidgetOption(widget, "hideOnZoom", false);
+    setWidgetOption(widget, "canvasOnly", false);
+    node.__h3SaveVideoWidget = widget;
+    node.__h3SaveVideoWrap = wrap;
+    node.__h3SaveVideoElement = video;
+    node.__h3SaveVideoMessage = message;
+}
+
+function installSaveVideoNode(nodeType, nodeData) {
+    if (nodeData?.name !== SAVE_CLASS) return;
+    if (nodeType.prototype.__h3EasySaveVideoInstalled) return;
+    nodeType.prototype.__h3EasySaveVideoInstalled = true;
+
+    const originalCreated = nodeType.prototype.onNodeCreated;
+    nodeType.prototype.onNodeCreated = function onNodeCreatedH3SaveVideo() {
+        const result = originalCreated?.apply(this, arguments);
+        localizeNodeInstance(this);
+        ensureSaveVideoPreview(this);
+        return result;
+    };
+
+    const originalConfigure = nodeType.prototype.onConfigure;
+    nodeType.prototype.onConfigure = function onConfigureH3SaveVideo(info) {
+        const result = originalConfigure?.apply(this, arguments);
+        localizeNodeInstance(this);
+        ensureSaveVideoPreview(this);
+        return result;
+    };
+
+    const originalExecuted = nodeType.prototype.onExecuted;
+    nodeType.prototype.onExecuted = function onExecutedH3SaveVideo(output) {
+        const result = originalExecuted?.apply(this, arguments);
+        ensureSaveVideoPreview(this);
+        setSaveVideoPreview(this, output?.h3_saved_video?.[0]);
+        this.setDirtyCanvas?.(true, true);
+        return result;
+    };
+
+    const originalRemoved = nodeType.prototype.onRemoved;
+    nodeType.prototype.onRemoved = function onRemovedH3SaveVideo() {
+        this.__h3SaveVideoElement?.pause?.();
+        this.__h3SaveVideoWrap?.remove?.();
+        this.__h3SaveVideoWidget = null;
+        this.__h3SaveVideoWrap = null;
+        this.__h3SaveVideoElement = null;
+        this.__h3SaveVideoMessage = null;
+        return originalRemoved?.apply(this, arguments);
+    };
+}
+
 function install() {
     if (installed) return;
     installed = true;
@@ -4002,6 +4168,18 @@ function install() {
         -webkit-box-decoration-break: clone; box-decoration-break: clone; user-select: text; cursor: text; outline: none;
       }
       .h3-dialogue-block:focus { background: rgba(0,226,187,.19); box-shadow: inset 0 0 0 1px rgba(0,226,187,.26); }
+      .h3-save-video-wrap {
+        position: relative; display: flex; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden;
+        align-items: center; justify-content: center; box-sizing: border-box; background: #111;
+      }
+      .h3-save-video-preview {
+        display: block; width: 100%; height: 100%; min-width: 0; min-height: 0; max-width: 100%; max-height: 100%;
+        object-fit: contain; background: #111;
+      }
+      .h3-save-video-message {
+        max-width: 100%; padding: 8px; box-sizing: border-box; overflow-wrap: anywhere; text-align: center;
+        color: var(--h3-native-widget-muted, rgba(255,255,255,.55)); font-size: 12px; letter-spacing: 0;
+      }
       .h3-mention-chip-thumb { display: inline-block; width: 16px; height: 16px; margin-right: 2px; object-fit: cover; border-radius: 3px; vertical-align: -2px; background: rgba(255,255,255,.12); user-select: none; }
       .h3-mention-chip-thumb.is-image, .h3-mention-menu-thumb.is-image { background: #5aa9f0; }
       .h3-mention-chip-thumb.is-video, .h3-mention-menu-thumb.is-video { position: relative; background: linear-gradient(135deg, #1557b8, #49b6ff); }
@@ -4038,6 +4216,7 @@ app.registerExtension({
         installMediaSourceNode(nodeType, nodeData);
         installLoaderNode(nodeType, nodeData);
         installOutputNode(nodeType, nodeData);
+        installSaveVideoNode(nodeType, nodeData);
         installNode(nodeType, nodeData);
     },
 });

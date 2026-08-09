@@ -11,6 +11,17 @@ The idea is simple: keep the power of ComfyUI, while removing the repetitive
 media wiring and reference bookkeeping that normally make MiniMax H3 workflows
 hard to read and harder to learn.
 
+## Updates
+
+### 2026-08-09
+
+- Added **MiniMax H3 Easy Save Video**, whose preview follows manual node resizing
+  without expanding to the video's native dimensions after execution.
+- Added an `IMAGE` batch containing the first frame of every second, calculated
+  from the connected duration and total frame count.
+- Added a separate `Last frame` `IMAGE` output taken directly from the end of the
+  actual decoded video frame sequence.
+
 ## Highlights
 
 ### One `Media` input for mixed media
@@ -130,9 +141,28 @@ Assistant integration, connect the workflow as follows:
 When `Optimized prompt` is not connected, the original Conditioning is used
 unchanged, preserving existing workflows.
 
-The sampler, acceleration nodes, video/audio processing, and save nodes remain
-outside the main node so the workflow stays compatible with the rest of
-ComfyUI.
+### MiniMax H3 Easy Save Video
+
+Connect a ComfyUI `VIDEO` to this node to save it. The custom preview has a small
+fixed minimum size and follows manual node width and height changes. Loading the
+saved video never resizes the node to the video's native resolution.
+
+The node accepts the video duration and its actual total frame count, along with
+the filename prefix, container format, and codec. It exposes three outputs:
+
+- `Video` passes the saved input `VIDEO` through for downstream use.
+- `First frame of each second` is an `IMAGE` batch sampled at each whole-second
+  boundary.
+- `Last frame` is a single `IMAGE` taken directly from the end of the decoded
+  frame sequence.
+
+Per-second indexes use `floor(second index × total frames ÷ video seconds)`. For
+a 5-second, 121-frame video, the batch contains frames `0, 24, 48, 72, 96`, while
+`Last frame` returns frame `120`. A mismatched total-frame input raises an error
+instead of silently extracting the wrong images.
+
+The sampler, acceleration nodes, and other video/audio processing nodes remain
+outside the main node so the workflow stays compatible with the rest of ComfyUI.
 
 ## Modes
 
@@ -224,6 +254,8 @@ own work.
 - A video's synchronized audio is paired with that video automatically and does
   not consume a separate audio slot.
 - Image, video, and audio numbering is independent.
+- The save node's `Total frames` input must match the connected video's actual
+  frame count.
 - The node supports both the legacy ComfyUI canvas and Nodes 2.0.
 - Chinese browsers show Chinese parameter labels; other browsers show English
   labels.
