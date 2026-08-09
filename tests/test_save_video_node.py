@@ -77,32 +77,34 @@ class SaveVideoNodeTests(unittest.TestCase):
         cls.symbols = load_save_video_symbols()
 
     def test_five_seconds_samples_the_first_frame_of_each_second(self):
-        indexes = self.symbols["_per_second_frame_indices"](5.0, 121)
+        indexes = self.symbols["_per_second_frame_indices"](5.0, 24.0, 121)
 
         self.assertEqual(indexes, [0, 24, 48, 72, 96])
 
     def test_partial_final_second_is_included(self):
-        indexes = self.symbols["_per_second_frame_indices"](5.5, 121)
+        indexes = self.symbols["_per_second_frame_indices"](5.5, 24.0, 121)
 
-        self.assertEqual(indexes, [0, 22, 44, 66, 88, 110])
+        self.assertEqual(indexes, [0, 24, 48, 72, 96, 120])
 
     def test_extracts_sample_batch_and_actual_last_frame(self):
         frames = FakeFrames(range(121))
 
         sampled, last = self.symbols["_extract_video_output_frames"](
-            frames, seconds=5.0, frame_count=121
+            frames, seconds=5.0, fps=24.0
         )
 
         self.assertEqual(sampled, [0, 24, 48, 72, 96])
         self.assertEqual(last, [120])
 
-    def test_rejects_a_frame_count_that_does_not_match_the_video(self):
+    def test_uses_the_actual_video_frame_count_as_an_automatic_bound(self):
         frames = FakeFrames(range(121))
 
-        with self.assertRaisesRegex(ValueError, "actual video frame count is 121"):
-            self.symbols["_extract_video_output_frames"](
-                frames, seconds=5.0, frame_count=120
-            )
+        sampled, last = self.symbols["_extract_video_output_frames"](
+            frames, seconds=10.0, fps=24.0
+        )
+
+        self.assertEqual(sampled, [0, 24, 48, 72, 96, 120])
+        self.assertEqual(last, [120])
 
     def test_node_exposes_video_sample_batch_and_last_frame_outputs(self):
         node = self.symbols["MiniMaxH3EasySaveVideo"]
@@ -116,7 +118,9 @@ class SaveVideoNodeTests(unittest.TestCase):
         required = node.INPUT_TYPES()["required"]
         self.assertIn("video", required)
         self.assertIn("seconds", required)
-        self.assertIn("frame_count", required)
+        self.assertIn("fps", required)
+        self.assertNotIn("frame_count", required)
+        self.assertTrue(required["fps"][1]["forceInput"])
 
     def test_save_uses_comfy_video_api_and_returns_all_three_outputs(self):
         frames = FakeFrames(range(121))
@@ -130,7 +134,7 @@ class SaveVideoNodeTests(unittest.TestCase):
         output = node.save(
             video,
             seconds=5.0,
-            frame_count=121,
+            fps=24.0,
             filename_prefix="video/clip",
             format="mp4",
             codec="h264",

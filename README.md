@@ -18,7 +18,7 @@ hard to read and harder to learn.
 - Added **MiniMax H3 Easy Save Video**, whose preview follows manual node resizing
   without expanding to the video's native dimensions after execution.
 - Added an `IMAGE` batch containing the first frame of every second, calculated
-  from the connected duration and total frame count.
+  from the connected duration and FPS without requiring a manual frame count.
 - Added a separate `Last frame` `IMAGE` output taken directly from the end of the
   actual decoded video frame sequence.
 
@@ -147,8 +147,9 @@ Connect a ComfyUI `VIDEO` to this node to save it. The custom preview has a smal
 fixed minimum size and follows manual node width and height changes. Loading the
 saved video never resizes the node to the video's native resolution.
 
-The node accepts the video duration and its actual total frame count, along with
-the filename prefix, container format, and codec. It exposes three outputs:
+The node accepts the video duration and FPS, along with the filename prefix,
+container format, and codec. Its `FPS` input can connect directly to the matching
+output on **MiniMax H3 Easy Output**. It exposes three outputs:
 
 - `Video` passes the saved input `VIDEO` through for downstream use.
 - `First frame of each second` is an `IMAGE` batch sampled at each whole-second
@@ -156,10 +157,10 @@ the filename prefix, container format, and codec. It exposes three outputs:
 - `Last frame` is a single `IMAGE` taken directly from the end of the decoded
   frame sequence.
 
-Per-second indexes use `floor(second index × total frames ÷ video seconds)`. For
-a 5-second, 121-frame video, the batch contains frames `0, 24, 48, 72, 96`, while
-`Last frame` returns frame `120`. A mismatched total-frame input raises an error
-instead of silently extracting the wrong images.
+Per-second indexes use `floor(second index × FPS)`. For a 5-second, 24 FPS video
+with 121 frames, the batch contains frames `0, 24, 48, 72, 96`, while `Last
+frame` returns frame `120`. The node reads the actual frame count automatically
+and uses it to prevent out-of-range extraction.
 
 The sampler, acceleration nodes, and other video/audio processing nodes remain
 outside the main node so the workflow stays compatible with the rest of ComfyUI.
@@ -254,8 +255,8 @@ own work.
 - A video's synchronized audio is paired with that video automatically and does
   not consume a separate audio slot.
 - Image, video, and audio numbering is independent.
-- The save node's `Total frames` input must match the connected video's actual
-  frame count.
+- The save node's `FPS` input can connect directly to the matching output on
+  **MiniMax H3 Easy Output**.
 - The node supports both the legacy ComfyUI canvas and Nodes 2.0.
 - Chinese browsers show Chinese parameter labels; other browsers show English
   labels.

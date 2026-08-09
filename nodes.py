@@ -922,31 +922,32 @@ class MiniMaxH3EasyOutput:
         )
 
 
-def _per_second_frame_indices(seconds: float, frame_count: int) -> list[int]:
+def _per_second_frame_indices(seconds: float, fps: float, frame_count: int) -> list[int]:
     seconds = float(seconds)
+    fps = float(fps)
     frame_count = int(frame_count)
     if not math.isfinite(seconds) or seconds <= 0:
         raise ValueError("Video seconds must be greater than zero")
+    if not math.isfinite(fps) or fps <= 0:
+        raise ValueError("Video FPS must be greater than zero")
     if frame_count <= 0:
         raise ValueError("Video frame count must be greater than zero")
 
-    return [
-        min(frame_count - 1, math.floor(second * frame_count / seconds))
-        for second in range(math.ceil(seconds))
-    ]
+    indexes = []
+    for second in range(math.ceil(seconds)):
+        index = math.floor(second * fps)
+        if index >= frame_count:
+            break
+        indexes.append(index)
+    return indexes
 
 
-def _extract_video_output_frames(frames, seconds: float, frame_count: int):
+def _extract_video_output_frames(frames, seconds: float, fps: float):
     actual_frame_count = int(frames.shape[0])
     if actual_frame_count <= 0:
         raise ValueError("The connected video contains no frames")
-    if int(frame_count) != actual_frame_count:
-        raise ValueError(
-            f"The frame_count input is {int(frame_count)}, but the actual video frame count is "
-            f"{actual_frame_count}. Connect the matching frame count to avoid incorrect extraction."
-        )
 
-    indexes = _per_second_frame_indices(seconds, actual_frame_count)
+    indexes = _per_second_frame_indices(seconds, fps, actual_frame_count)
     return frames[indexes], frames[-1:]
 
 
@@ -967,7 +968,7 @@ class MiniMaxH3EasySaveVideo:
             "required": {
                 "video": ("VIDEO",),
                 "seconds": ("FLOAT", {"default": 5.0, "min": 0.01, "max": 86400.0, "step": 0.01}),
-                "frame_count": ("INT", {"default": 121, "min": 1, "max": 2147483647, "step": 1}),
+                "fps": ("FLOAT", {"forceInput": True}),
                 "filename_prefix": (
                     "STRING",
                     {"default": "video/MiniMaxH3", "multiline": False},
@@ -985,7 +986,7 @@ class MiniMaxH3EasySaveVideo:
     def save(
         video,
         seconds,
-        frame_count,
+        fps,
         filename_prefix,
         format,
         codec,
@@ -996,7 +997,7 @@ class MiniMaxH3EasySaveVideo:
         sampled_frames, last_frame = _extract_video_output_frames(
             components.images,
             seconds,
-            frame_count,
+            fps,
         )
 
         width, height = video.get_dimensions()

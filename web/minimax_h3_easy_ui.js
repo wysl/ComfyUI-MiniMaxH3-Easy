@@ -74,7 +74,7 @@ const TEXT = {
     inputMedia: "Media",
     saveVideoInput: ZH_BROWSER ? "\u89c6\u9891" : "Video",
     saveSeconds: ZH_BROWSER ? "\u89c6\u9891\u79d2\u6570" : "Video seconds",
-    saveFrameCount: ZH_BROWSER ? "\u603b\u5e27\u6570" : "Total frames",
+    saveFps: ZH_BROWSER ? "\u5e27\u7387 (FPS)" : "Frame rate (FPS)",
     filenamePrefix: ZH_BROWSER ? "\u6587\u4ef6\u540d\u524d\u7f00" : "Filename prefix",
     saveFormat: ZH_BROWSER ? "\u5c01\u88c5\u683c\u5f0f" : "Container format",
     saveCodec: ZH_BROWSER ? "\u7f16\u7801\u5668" : "Codec",
@@ -269,7 +269,7 @@ function localizeNodeInstance(node) {
         const labels = {
             video: TEXT.saveVideoInput,
             seconds: TEXT.saveSeconds,
-            frame_count: TEXT.saveFrameCount,
+            fps: TEXT.saveFps,
             filename_prefix: TEXT.filenamePrefix,
             format: TEXT.saveFormat,
             codec: TEXT.saveCodec,
