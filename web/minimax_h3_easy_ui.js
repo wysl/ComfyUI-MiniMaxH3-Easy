@@ -343,6 +343,17 @@ function getWidgetValue(node, name, fallback = "") {
     return widget?.value ?? fallback;
 }
 
+function isPromptLink(value) {
+    return Array.isArray(value)
+        && value.length === 2
+        && (typeof value[0] === "string" || typeof value[0] === "number")
+        && Number.isInteger(Number(value[1]));
+}
+
+function setPromptInputIfUnlinked(promptNode, name, value) {
+    if (!isPromptLink(promptNode.inputs?.[name])) promptNode.inputs[name] = value;
+}
+
 function asBoolean(value, fallback = false) {
     if (typeof value === "boolean") return value;
     if (typeof value === "number") return value !== 0;
@@ -1389,18 +1400,18 @@ function patchGraphToPrompt() {
                 promptNode.inputs[`media_${index + 1}`] = [String(link.source_id), slot];
                 promptNode.inputs[`media_type_${index + 1}`] = String(link.media_type || "image");
             });
-            promptNode.inputs.prompt = buildRuntimePrompt(node, runtimeLinks);
-            promptNode.inputs.mode = canonicalOption("mode", getWidgetValue(node, "mode", MODE_IMAGE));
-            promptNode.inputs.resolution = canonicalOption("resolution", getWidgetValue(node, "resolution", "480P"));
-            promptNode.inputs.aspect_ratio = canonicalOption("aspect_ratio", getWidgetValue(node, "aspect_ratio", "16:9"));
-            promptNode.inputs.width = Number(getWidgetValue(node, "width", 1344));
-            promptNode.inputs.height = Number(getWidgetValue(node, "height", 768));
-            promptNode.inputs.seconds = Math.min(MAX_SECONDS, Math.max(MIN_SECONDS, Number(getWidgetValue(node, "seconds", 5)) || 5));
-            promptNode.inputs.advanced = asBoolean(getWidgetValue(node, "advanced", false));
-            promptNode.inputs.fps = Number(getWidgetValue(node, "fps", 24));
-            promptNode.inputs.keyframe_role = canonicalOption("keyframe_role", getWidgetValue(node, "keyframe_role", KEYFRAME_FIRST));
-            promptNode.inputs.ref_image_size = canonicalOption("ref_image_size", getWidgetValue(node, "ref_image_size", REF_IMAGE_1K));
-            promptNode.inputs.reference_mention_mode = canonicalOption("reference_mention_mode", getWidgetValue(node, "reference_mention_mode", "index"));
+            setPromptInputIfUnlinked(promptNode, "prompt", buildRuntimePrompt(node, runtimeLinks));
+            setPromptInputIfUnlinked(promptNode, "mode", canonicalOption("mode", getWidgetValue(node, "mode", MODE_IMAGE)));
+            setPromptInputIfUnlinked(promptNode, "resolution", canonicalOption("resolution", getWidgetValue(node, "resolution", "480P")));
+            setPromptInputIfUnlinked(promptNode, "aspect_ratio", canonicalOption("aspect_ratio", getWidgetValue(node, "aspect_ratio", "16:9")));
+            setPromptInputIfUnlinked(promptNode, "width", Number(getWidgetValue(node, "width", 1344)));
+            setPromptInputIfUnlinked(promptNode, "height", Number(getWidgetValue(node, "height", 768)));
+            setPromptInputIfUnlinked(promptNode, "seconds", Math.min(MAX_SECONDS, Math.max(MIN_SECONDS, Number(getWidgetValue(node, "seconds", 5)) || 5)));
+            setPromptInputIfUnlinked(promptNode, "advanced", asBoolean(getWidgetValue(node, "advanced", false)));
+            setPromptInputIfUnlinked(promptNode, "fps", Number(getWidgetValue(node, "fps", 24)));
+            setPromptInputIfUnlinked(promptNode, "keyframe_role", canonicalOption("keyframe_role", getWidgetValue(node, "keyframe_role", KEYFRAME_FIRST)));
+            setPromptInputIfUnlinked(promptNode, "ref_image_size", canonicalOption("ref_image_size", getWidgetValue(node, "ref_image_size", REF_IMAGE_1K)));
+            setPromptInputIfUnlinked(promptNode, "reference_mention_mode", canonicalOption("reference_mention_mode", getWidgetValue(node, "reference_mention_mode", "index")));
         }
         return promptData;
     };

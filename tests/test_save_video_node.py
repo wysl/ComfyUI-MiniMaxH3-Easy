@@ -14,6 +14,7 @@ def load_save_video_symbols():
     source_path = PROJECT_ROOT / "nodes.py"
     tree = ast.parse(source_path.read_text(encoding="utf-8"))
     names = {
+        "_frame_length",
         "_per_second_frame_indices",
         "_extract_video_output_frames",
         "MiniMaxH3EasySaveVideo",
@@ -80,6 +81,9 @@ class SaveVideoNodeTests(unittest.TestCase):
         indexes = self.symbols["_per_second_frame_indices"](5.0, 24.0, 121)
 
         self.assertEqual(indexes, [0, 24, 48, 72, 96])
+
+    def test_ten_seconds_uses_the_h3_aligned_frame_count(self):
+        self.assertEqual(self.symbols["_frame_length"](10.0, 24.0), 243)
 
     def test_partial_final_second_is_included(self):
         indexes = self.symbols["_per_second_frame_indices"](5.5, 24.0, 121)
@@ -158,6 +162,22 @@ class SaveVideoNodeTests(unittest.TestCase):
         self.assertIn('"MiniMaxH3EasySaveVideo": MiniMaxH3EasySaveVideo', init_source)
         self.assertIn('const SAVE_CLASS = "MiniMaxH3EasySaveVideo";', web_source)
         self.assertIn("installSaveVideoNode(nodeType, nodeData);", web_source)
+
+    def test_frontend_preserves_connected_seconds_input(self):
+        web_source = (PROJECT_ROOT / "web" / "minimax_h3_easy_ui.js").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("function isPromptLink(value)", web_source)
+        self.assertIn(
+            "if (!isPromptLink(promptNode.inputs?.[name])) promptNode.inputs[name] = value;",
+            web_source,
+        )
+        self.assertIn(
+            'setPromptInputIfUnlinked(promptNode, "seconds",',
+            web_source,
+        )
+        self.assertNotIn("promptNode.inputs.seconds =", web_source)
 
 
 if __name__ == "__main__":

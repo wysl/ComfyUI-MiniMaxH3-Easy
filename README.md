@@ -17,6 +17,8 @@ hard to read and harder to learn.
 
 - `H3 Context` now exposes the exact video duration to Prompt Assistant for
   multi-shot timing in T2VA, I2VA, FL2VA, and L2VA prompts.
+- Fixed connected `Seconds` values being overwritten by the node's stale internal
+  widget value, so one duration input can now drive both H3 generation and video saving.
 
 ### 2026-08-09
 
