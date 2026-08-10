@@ -82,7 +82,9 @@ class SaveVideoNodeTests(unittest.TestCase):
 
         self.assertEqual(indexes, [0, 24, 48, 72, 96])
 
-    def test_ten_seconds_uses_the_h3_aligned_frame_count(self):
+    def test_requested_duration_is_rounded_up_to_the_h3_frame_grid(self):
+        self.assertEqual(self.symbols["_frame_length"](4.0, 24.0), 107)
+        self.assertEqual(self.symbols["_frame_length"](6.0, 24.0), 158)
         self.assertEqual(self.symbols["_frame_length"](10.0, 24.0), 243)
 
     def test_partial_final_second_is_included(self):

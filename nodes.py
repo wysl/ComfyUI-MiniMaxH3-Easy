@@ -596,7 +596,7 @@ def _canvas_dimensions(resolution: str, aspect_ratio: str, custom_width: int, cu
 
 def _frame_length(seconds: float, fps: float) -> int:
     target_frames = max(5.0, float(seconds) * float(fps))
-    block_count = max(0, round((target_frames - 5) / 17))
+    block_count = max(0, math.ceil((target_frames - 5) / 17))
     return block_count * 17 + 5
 
 

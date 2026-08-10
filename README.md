@@ -19,6 +19,8 @@ hard to read and harder to learn.
   multi-shot timing in T2VA, I2VA, FL2VA, and L2VA prompts.
 - Fixed connected `Seconds` values being overwritten by the node's stale internal
   widget value, so one duration input can now drive both H3 generation and video saving.
+- Fixed some durations being aligned downward. Frame counts now round up to H3's
+  `17k+5` grid so generated videos are never shorter than the requested duration.
 
 ### 2026-08-09
 
@@ -206,8 +208,9 @@ Custom width and height must be multiples of 32.
 
 ### Duration
 
-Duration is set in seconds from **4 to 20**. The requested duration is aligned
-to MiniMax H3's frame rules internally.
+Duration is set in seconds from **4 to 20**. MiniMax H3 requires frame counts on
+the `17k+5` grid, so the node rounds up to the nearest valid count. The actual
+duration may be slightly longer than requested, but never shorter.
 
 ### Advanced options
 
