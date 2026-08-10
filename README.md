@@ -13,6 +13,11 @@ hard to read and harder to learn.
 
 ## Updates
 
+### 2026-08-10
+
+- `H3 Context` now exposes the exact video duration to Prompt Assistant for
+  multi-shot timing in T2VA, I2VA, FL2VA, and L2VA prompts.
+
 ### 2026-08-09
 
 - Added **MiniMax H3 Easy Save Video**, whose preview follows manual node resizing

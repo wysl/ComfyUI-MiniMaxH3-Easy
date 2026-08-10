@@ -45,6 +45,7 @@ class PromptAssistantIntegrationTests(unittest.TestCase):
             video_vae="video vae",
             audio_vae="audio vae",
             fps=24.0,
+            seconds=8.0,
             prompt="original prompt",
             mode="reference",
             media=(("image", image), ("video", video), ("audio", audio)),
@@ -59,6 +60,7 @@ class PromptAssistantIntegrationTests(unittest.TestCase):
 
         self.assertEqual(payload["prompt"], "original prompt")
         self.assertEqual(payload["mode"], "reference")
+        self.assertEqual(payload["duration_seconds"], 8.0)
         self.assertEqual(payload["images"], [image])
         self.assertEqual(payload["videos"], [video])
         self.assertEqual(payload["audios"], [audio])

@@ -421,6 +421,7 @@ class MiniMaxH3Context:
     media: tuple[tuple[str, Any], ...] = ()
     keyframe_roles: tuple[str, ...] = ()
     _prompt_encoder: Any = None
+    seconds: float = 5.0
 
     def prompt_assistant_payload(self) -> dict[str, Any]:
         """Expose the original generation inputs without importing either plugin."""
@@ -444,6 +445,7 @@ class MiniMaxH3Context:
         return {
             "prompt": self.prompt,
             "mode": self.mode,
+            "duration_seconds": float(self.seconds),
             "images": [value for media_type, value in self.media if media_type == "image"],
             "videos": [value for media_type, value in self.media if media_type == "video"],
             "audios": [*synchronized_audios, *standalone_audios],
@@ -873,6 +875,7 @@ class MiniMaxH3Easy:
             video_vae=h3_bundle.video_vae,
             audio_vae=h3_bundle.audio_vae,
             fps=float(fps),
+            seconds=float(seconds),
             prompt=context_prompt,
             mode=context_mode,
             media=context_media,
