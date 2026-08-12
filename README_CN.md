@@ -112,7 +112,12 @@ FL2VA，参考生视频优先使用 Ref2VA。两种主模型不能同时设置�
 - Latent；
 - Video VAE；
 - Audio VAE；
-- FPS。
+- FPS；
+- H3 实际使用的原始宽度和高度；
+- 按 `1.2 / 1.4 / 1.5 / 1.6 / 2.0` 倍计算并对齐到 32 的放大宽度和高度。
+
+放大宽高可直接连接 **Resize Image v2**。为严格采用这两个目标尺寸，建议将该节点的
+`keep_proportion` 设为 `stretch`、`divisible_by` 设为 `32`。
 
 输出节点还提供可选的 `优化后的提示词` 输入。与 Prompt Assistant 配合时，按以下方式连接：
 

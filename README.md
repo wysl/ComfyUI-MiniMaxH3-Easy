@@ -134,7 +134,13 @@ This node expands `H3 Context` into the standard workflow outputs:
 - Latent;
 - Video VAE;
 - Audio VAE;
-- FPS.
+- FPS;
+- the original width and height actually used by H3;
+- scaled width and height using `1.2 / 1.4 / 1.5 / 1.6 / 2.0`, aligned to 32.
+
+The scaled dimensions can connect directly to **Resize Image v2**. To apply
+both target dimensions exactly, set that node's `keep_proportion` to `stretch`
+and `divisible_by` to `32`.
 
 The output node also has an optional `Optimized prompt` input. For Prompt
 Assistant integration, connect the workflow as follows:

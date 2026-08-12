@@ -422,6 +422,8 @@ class MiniMaxH3Context:
     keyframe_roles: tuple[str, ...] = ()
     _prompt_encoder: Any = None
     seconds: float = 5.0
+    width: int = 0
+    height: int = 0
 
     def prompt_assistant_payload(self) -> dict[str, Any]:
         """Expose the original generation inputs without importing either plugin."""
@@ -876,6 +878,8 @@ class MiniMaxH3Easy:
             audio_vae=h3_bundle.audio_vae,
             fps=float(fps),
             seconds=float(seconds),
+            width=int(width),
+            height=int(height),
             prompt=context_prompt,
             mode=context_mode,
             media=context_media,
@@ -888,8 +892,18 @@ class MiniMaxH3Easy:
 class MiniMaxH3EasyOutput:
     CATEGORY = "MiniMax H3 Easy"
     FUNCTION = "unpack"
-    RETURN_TYPES = ("CONDITIONING", "LATENT", "VAE", "VAE", "FLOAT")
-    RETURN_NAMES = ("positive", "latent", "video_vae", "audio_vae", "fps")
+    RETURN_TYPES = ("CONDITIONING", "LATENT", "VAE", "VAE", "FLOAT", "INT", "INT", "INT", "INT")
+    RETURN_NAMES = (
+        "positive",
+        "latent",
+        "video_vae",
+        "audio_vae",
+        "fps",
+        "original_width",
+        "original_height",
+        "scaled_width",
+        "scaled_height",
+    )
     DESCRIPTION = "Unpack the non-model outputs from a MiniMax H3 Easy context."
 
     @classmethod
@@ -897,6 +911,7 @@ class MiniMaxH3EasyOutput:
         return {
             "required": {
                 "h3_context": ("MINIMAX_H3_CONTEXT",),
+                "size_multiplier": (["1.2", "1.4", "1.5", "1.6", "2.0"], {"default": "1.5"}),
             },
             "optional": {
                 "optimized_prompt": ("STRING", {"forceInput": True}),
@@ -904,7 +919,7 @@ class MiniMaxH3EasyOutput:
         }
 
     @staticmethod
-    def unpack(h3_context, optimized_prompt=None):
+    def unpack(h3_context, optimized_prompt=None, size_multiplier="1.5"):
         if not isinstance(h3_context, MiniMaxH3Context):
             raise ValueError("Connect the H3 Context output from a MiniMax H3 Easy node")
         while isinstance(optimized_prompt, (list, tuple)):
@@ -916,12 +931,21 @@ class MiniMaxH3EasyOutput:
             if not optimized_prompt:
                 raise ValueError("The connected optimized prompt is empty")
             conditioning, latent = h3_context.encode_prompt(optimized_prompt)
+        original_width = int(h3_context.width)
+        original_height = int(h3_context.height)
+        multiplier = float(size_multiplier)
+        scaled_width = _align_canvas_dimension(original_width * multiplier)
+        scaled_height = _align_canvas_dimension(original_height * multiplier)
         return (
             conditioning,
             latent,
             h3_context.video_vae,
             h3_context.audio_vae,
             h3_context.fps,
+            original_width,
+            original_height,
+            scaled_width,
+            scaled_height,
         )
 
 
