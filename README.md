@@ -13,6 +13,12 @@ hard to read and harder to learn.
 
 ## Updates
 
+### 2026-08-13
+
+- Added **MiniMax H3 Easy Frame Interpolation**, which uses WhiteRabbit RIFE 4.7 to double the input video's FPS.
+- The node reads the source FPS automatically and preserves the original resolution, audio, and video bit depth without upscaling.
+- It uses `scale_factor=1.0` with `ensemble` disabled for a fast, resource-conscious quality balance. The `comfyui-WhiteRabbit` custom node must be installed and enabled.
+
 ### 2026-08-10
 
 - `H3 Context` now exposes the exact video duration to Prompt Assistant for
@@ -176,6 +182,24 @@ Per-second indexes use `floor(second index × FPS)`. For a 5-second, 24 FPS vide
 with 121 frames, the batch contains frames `0, 24, 48, 72, 96`, while `Last
 frame` returns frame `120`. The node reads the actual frame count automatically
 and uses it to prevent out-of-range extraction.
+
+### MiniMax H3 Easy Frame Interpolation
+
+Connect any ComfyUI `VIDEO` to this node to double its frame rate with WhiteRabbit
+RIFE 4.7. The source FPS is detected automatically, so a `24 FPS` input produces a
+`48 FPS` output without manual frame-count or frame-rate settings.
+
+- The node does not resize images or latents.
+- Original frames remain unchanged, with one generated frame inserted between each pair.
+- An `N`-frame input produces `2N` frames: it inserts one frame between each pair and holds the final source frame once, keeping the encoded video and audio duration unchanged.
+- Audio, metadata, and video bit depth are retained.
+- The new FPS is also exposed as a `FLOAT` output for save nodes.
+- RIFE 4.7, `scale_factor=1.0`, and `ensemble=false` are fixed internally.
+
+No new Python dependency is added, but
+[`comfyui-WhiteRabbit`](https://github.com/Artificial-Sweetener/comfyui-WhiteRabbit)
+must be installed and enabled with its `rife47.pth` model available. The node
+provides an actionable error when this dependency is missing.
 
 The sampler, acceleration nodes, and other video/audio processing nodes remain
 outside the main node so the workflow stays compatible with the rest of ComfyUI.

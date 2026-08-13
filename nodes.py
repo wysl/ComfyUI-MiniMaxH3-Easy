@@ -14,6 +14,7 @@ import sys
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
+from fractions import Fraction
 from functools import lru_cache, partial
 from typing import Any
 
@@ -25,7 +26,7 @@ import folder_paths
 import node_helpers
 import nodes
 from comfy.cli_args import args
-from comfy_api.latest import Types
+from comfy_api.latest import InputImpl, Types
 from comfy_extras import nodes_minimax_h3 as h3
 
 
@@ -1067,9 +1068,78 @@ class MiniMaxH3EasySaveVideo:
         }
 
 
+def _rife_vfi_node_class():
+    node_class = nodes.NODE_CLASS_MAPPINGS.get("RIFE_VFI_Opt")
+    if node_class is None:
+        raise RuntimeError(
+            "MiniMax H3 Easy Frame Interpolation requires the WhiteRabbit custom node "
+            "with its RIFE 4.7 model. Install or enable comfyui-WhiteRabbit, then restart ComfyUI."
+        )
+    return node_class
+
+
+class MiniMaxH3EasyFrameInterpolation:
+    CATEGORY = "MiniMax H3 Easy"
+    FUNCTION = "interpolate"
+    RETURN_TYPES = ("VIDEO", "FLOAT")
+    RETURN_NAMES = ("video", "fps")
+    DESCRIPTION = (
+        "Double a video's frame rate with WhiteRabbit RIFE 4.7 while preserving "
+        "the original resolution and audio."
+    )
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"video": ("VIDEO",)}}
+
+    @staticmethod
+    def interpolate(video):
+        components = video.get_components()
+        frames = components.images
+        if int(frames.shape[0]) < 2:
+            raise ValueError("Frame interpolation requires a video with at least two frames")
+
+        source_fps = float(components.frame_rate)
+        if not math.isfinite(source_fps) or source_fps <= 0:
+            raise ValueError("Video FPS must be greater than zero")
+
+        interpolated_frames, = _rife_vfi_node_class()().vfi(
+            ckpt_name="rife47.pth",
+            frames=frames,
+            multiplier=2,
+            scale_factor=1.0,
+            ensemble=False,
+            clear_cache_after_n_frames=10,
+        )
+        # RIFE returns 2N-1 frames. Holding the original final frame once keeps
+        # the encoded 2x-FPS video duration (and therefore its audio) unchanged.
+        interpolated_frames = torch.cat(
+            (
+                interpolated_frames,
+                frames[-1:].to(
+                    device=interpolated_frames.device,
+                    dtype=interpolated_frames.dtype,
+                ),
+            ),
+            dim=0,
+        )
+        output_fps = source_fps * 2.0
+        output_video = InputImpl.VideoFromComponents(
+            Types.VideoComponents(
+                images=interpolated_frames,
+                audio=components.audio,
+                frame_rate=Fraction(round(output_fps * 1000), 1000),
+                metadata=getattr(components, "metadata", None),
+            ),
+            bit_depth=video.get_bit_depth(),
+        )
+        return output_video, output_fps
+
+
 NODE_CLASS_MAPPINGS = {
     "MiniMaxH3EasyLoader": MiniMaxH3EasyLoader,
     "MiniMaxH3Easy": MiniMaxH3Easy,
     "MiniMaxH3EasyOutput": MiniMaxH3EasyOutput,
     "MiniMaxH3EasySaveVideo": MiniMaxH3EasySaveVideo,
+    "MiniMaxH3EasyFrameInterpolation": MiniMaxH3EasyFrameInterpolation,
 }
