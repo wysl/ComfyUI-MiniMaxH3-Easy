@@ -247,6 +247,12 @@ def _has_role(name: str, role: str) -> bool:
     return False
 
 
+def _is_h3_transformer_name(name: str) -> bool:
+    """Return whether a diffusion model name explicitly identifies H3."""
+    compact = _normalise_model_name(name).replace(" ", "")
+    return "h3" in compact
+
+
 def _sort_model_names(names: list[str]) -> list[str]:
     def sort_key(name: str) -> tuple[int, int, str]:
         normalised = _normalise_model_name(name)
@@ -285,11 +291,19 @@ def _filtered_choices(category: str, needles: tuple[str, ...], fallback: str) ->
 
 
 def _model_choices() -> list[str]:
-    return _optional_role_choices("fl2va", ("diffusion_models", "unet", "unet_gguf"))
+    return _h3_transformer_choices()
 
 
 def _ref_model_choices() -> list[str]:
-    return _optional_role_choices("ref2va", ("diffusion_models", "unet", "unet_gguf"))
+    return _h3_transformer_choices()
+
+
+def _h3_transformer_choices() -> list[str]:
+    names = _collect_weight_names(("diffusion_models", "unet", "unet_gguf"))
+    selected = _sort_model_names([name for name in names if _is_h3_transformer_name(name)])
+    # Both transformer slots intentionally expose every H3-named weight. Some
+    # community exports omit the FL2VA/REF2VA role in the filename.
+    return [*selected, *NONE_MODEL_DISPLAY_VALUES]
 
 
 def _clip_choices() -> list[str]:
