@@ -12,6 +12,13 @@
 
 ## 更新内容
 
+### 2026-08-16
+
+- 新增 **MiniMax H3 Easy 远景人脸修复** 节点：逐帧追踪远景小脸，将稳定裁剪交给 H3 局部二次生成，再通过时序平滑、颜色匹配和羽化蒙版贴回原视频；
+- 支持单人和双人顺序修复，输出保留输入视频的音频、FPS、元数据、透明通道和视频位深；
+- 节点执行时展开成标准 ComfyUI 子图，模型缓存和显存调度仍由 ComfyUI 管理；
+- 可从包含 `4step`、`8step` 的 Turbo LoRA 文件名自动识别采样步数，也允许手动指定。
+
 ### 2026-08-13
 
 - 新增 **MiniMax H3 Easy 视频补帧** 节点，使用 WhiteRabbit 的 RIFE 4.7 将输入视频固定补帧为 2 倍 FPS；
@@ -98,6 +105,8 @@
 - 音频 VAE。
 
 官方和常见社区模型命名都可以识别，包括 BF16、FP8、INT8、INT4、NVFP4、NF4 和 GGUF等版本。
+FL2VA 和 Ref2VA 两个下拉框都会显示相对文件名中包含 `h3` 的全部权重，因此没有明确
+写出 FL2VA/Ref2VA 后缀的社区模型也可以手动选择。
 
 如果只想使用一种主模型，将另一种模型设置为“无”即可。节点会自动使用剩下的模型完成文生视频、
 图生或首尾帧、参考生视频等多种任务。同时安装两种模型时，文生视频、图生或首尾帧优先使用
@@ -132,6 +141,29 @@ FL2VA，参考生视频优先使用 Ref2VA。两种主模型不能同时设置�
 3. 融合节点会自动读取原提示词、生成模式和有序媒体，输出节点再用优化结果重新编码 Conditioning。
 
 不连接 `优化后的提示词` 时，输出节点继续使用主节点原先生成的 Conditioning，旧工作流行为不变。
+
+### MiniMax H3 Easy 远景人脸修复
+
+将首次生成得到的 `VIDEO`、同一个加载器的 `H3 Bundle`，以及对应的 `H3 Context`
+连接到此节点。节点会检测并稳定追踪远景人脸，对裁剪区域执行一次 H3 img2img 局部重绘，
+然后输出保留原音频、FPS、元数据、透明通道和位深的 `VIDEO`。
+
+- 必须接在原始 `24 FPS` H3 视频之后、视频补帧节点之前；
+- `single person` 模式在画面只有一个主体或目标始终是最大脸时可以不接身份图；在人群中建议连接身份参考图；
+- `two people` 模式必须连接两张身份参考图，节点会按顺序分别修复两人，并保留上一人的贴回结果；
+- `steps=0` 会从 Turbo LoRA 文件名中的 `4step` 或 `8step` 自动决定步数；不使用 Turbo LoRA 时自动采用 20 步；
+- 可将 Prompt Assistant 的融合提示词连接到 `optimized prompt`，让二次修复继续遵守同一份优化后场景描述。
+
+运行所需资源：
+
+- 将 `face_yolov8m.pt` 或其他可用人脸检测器放入 `models/ultralytics/bbox/`；
+- **MiniMax H3 Easy Loader** 的 Ref2VA 槽位必须选择有效模型；
+- H3 Turbo LoRA 不是强制依赖，但建议使用以缩短二次生成时间；
+- 身份追踪使用 InsightFace `buffalo_l`，首次使用时可能自动下载。建议只安装一种 ONNX Runtime，避免执行提供程序冲突。
+
+此功能基于 MIT 许可证下的
+[`ComfyUI-H3-FaceRefine`](https://github.com/Carasibana/ComfyUI-H3-FaceRefine)
+改造，许可证说明见 `THIRD_PARTY_NOTICES.md`。
 
 ### MiniMax H3 Easy 保存视频
 

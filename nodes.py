@@ -21,12 +21,15 @@ from typing import Any
 import torch
 import torchaudio
 
+import comfy.nested_tensor
 import comfy.model_management
+import comfy.samplers
 import folder_paths
 import node_helpers
 import nodes
 from comfy.cli_args import args
 from comfy_api.latest import InputImpl, Types
+from comfy_execution.graph_utils import GraphBuilder
 from comfy_extras import nodes_minimax_h3 as h3
 
 
@@ -41,6 +44,8 @@ REFERENCE_MENTION_INDEX = "index"
 NONE_MODEL = "none"
 NONE_MODEL_DISPLAY_VALUES = (NONE_MODEL, "None", "无")
 NONE_MODEL_ALIASES = {value.lower() for value in NONE_MODEL_DISPLAY_VALUES}
+FACE_REFINE_SINGLE = "single person"
+FACE_REFINE_TWO = "two people"
 RESOLUTION_360 = "360P"
 RESOLUTION_416 = "416P"
 RESOLUTION_480 = "480P"
@@ -304,6 +309,41 @@ def _h3_transformer_choices() -> list[str]:
     # Both transformer slots intentionally expose every H3-named weight. Some
     # community exports omit the FL2VA/REF2VA role in the filename.
     return [*selected, *NONE_MODEL_DISPLAY_VALUES]
+
+
+def _face_refine_detector_choices() -> list[str]:
+    from .face_refine_nodes import _detector_list
+
+    return _detector_list()
+
+
+def _face_refine_lora_choices() -> list[str]:
+    names = _collect_weight_names(("loras",))
+    selected = [
+        name for name in names
+        if "h3" in name.lower() and "turbo" in name.lower()
+    ]
+    return [*_sort_model_names(selected), NONE_MODEL]
+
+
+def _face_refine_sampler_choices() -> list[str]:
+    choices = list(getattr(comfy.samplers.KSampler, "SAMPLERS", ()))
+    return choices or ["res_multistep", "euler"]
+
+
+def _face_refine_scheduler_choices() -> list[str]:
+    choices = list(getattr(comfy.samplers.KSampler, "SCHEDULERS", ()))
+    return choices or ["simple"]
+
+
+def _face_refine_step_count(lora_name: str, requested_steps: int) -> int:
+    requested_steps = int(requested_steps)
+    if requested_steps > 0:
+        return requested_steps
+    if str(lora_name or "").strip().lower() in NONE_MODEL_ALIASES:
+        return 20
+    match = re.search(r"(\d+)\s*[_-]?\s*steps?", str(lora_name or ""), re.IGNORECASE)
+    return max(1, int(match.group(1))) if match else 8
 
 
 def _clip_choices() -> list[str]:
@@ -964,6 +1004,386 @@ class MiniMaxH3EasyOutput:
         )
 
 
+def _face_refine_prompt(prompt: str, identity_reference: bool) -> str:
+    prompt = str(prompt or "").strip()
+    if not identity_reference:
+        return prompt
+    prompt = re.sub(r"<(?:Picture|Video|Audio)\s+\d+>", "", prompt, flags=re.IGNORECASE)
+    prompt = re.sub(r"\n{3,}", "\n\n", prompt).strip()
+    instruction = (
+        "Preserve the facial identity from <Picture 1>, the original head pose, expression, "
+        "lighting, motion and temporal continuity. Refine facial details only."
+    )
+    return f"<Picture 1>\n{prompt}\n{instruction}" if prompt else f"<Picture 1>\n{instruction}"
+
+
+def _face_refine_condition_inputs(
+    h3_bundle,
+    h3_context,
+    prompt,
+    width,
+    height,
+    length,
+    identity_reference=None,
+):
+    inputs = {
+        "clip": h3_bundle.clip,
+        "vae": h3_bundle.video_vae,
+        "audio_vae": h3_bundle.audio_vae,
+        "prompt": _face_refine_prompt(prompt, identity_reference is not None),
+        "width": width,
+        "height": height,
+        "length": int(length),
+        "ref_image_size": "max",
+    }
+    if identity_reference is not None:
+        inputs["ref_images.ref_image_0"] = identity_reference
+        return inputs
+
+    image_index = video_index = audio_index = 0
+    image_tags = []
+    for media_type, value in h3_context.media:
+        if media_type == "image":
+            inputs[f"ref_images.ref_image_{image_index}"] = value
+            image_index += 1
+            image_tags.append(f"<Picture {image_index}>")
+        elif media_type == "video":
+            frames, soundtrack, source_fps = _video_parts(value)
+            inputs[f"ref_videos.ref_video_{video_index}"] = _resample_video_frames(frames, source_fps)
+            if soundtrack is not None:
+                inputs[f"ref_video_audios.ref_video_audio_{video_index}"] = soundtrack
+            video_index += 1
+        elif media_type == "audio":
+            inputs[f"ref_audios.ref_audio_{audio_index}"] = value
+            audio_index += 1
+
+    if h3_context.mode == MODE_IMAGE and image_tags:
+        existing = str(inputs["prompt"])
+        missing_tags = [tag for tag in image_tags if tag not in existing]
+        if missing_tags:
+            inputs["prompt"] = "\n".join([*missing_tags, existing]).strip()
+    return inputs
+
+
+class MiniMaxH3EasyAudioLock:
+    CATEGORY = "MiniMax H3 Easy/Face Refine"
+    FUNCTION = "lock"
+    RETURN_TYPES = ("MODEL", "LATENT")
+    RETURN_NAMES = ("model", "av_latent")
+    DESCRIPTION = "Lock the source audio latent while the face-refine video stream is denoised."
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "av_latent": ("LATENT",),
+                "audio_vae": ("VAE",),
+                "audio": ("AUDIO",),
+            }
+        }
+
+    @staticmethod
+    def lock(model, av_latent, audio_vae, audio):
+        samples = av_latent.get("samples")
+        if samples is None or not (
+            isinstance(samples, comfy.nested_tensor.NestedTensor)
+            or getattr(samples, "is_nested", False)
+        ):
+            raise ValueError("Face refinement requires a MiniMax H3 joint AV latent")
+        members = list(samples.unbind())
+        if len(members) < 2:
+            raise ValueError("MiniMax H3 AV latent is missing its audio stream")
+
+        encoded, _ = _encode_reference_audio(audio_vae, audio)
+        target = members[1]
+        if tuple(encoded.shape[:-1]) != tuple(target.shape[:-1]):
+            raise ValueError(
+                f"Encoded audio shape {tuple(encoded.shape)} does not match H3 audio latent "
+                f"shape {tuple(target.shape)}"
+            )
+        encoded = encoded.to(device=target.device, dtype=target.dtype)
+        target_t = int(target.shape[-1])
+        if encoded.shape[-1] > target_t:
+            encoded = encoded[..., :target_t]
+        elif encoded.shape[-1] < target_t:
+            encoded = torch.cat(
+                (
+                    encoded,
+                    torch.zeros(
+                        (*encoded.shape[:-1], target_t - encoded.shape[-1]),
+                        device=encoded.device,
+                        dtype=encoded.dtype,
+                    ),
+                ),
+                dim=-1,
+            )
+        members[1] = encoded
+
+        out = dict(av_latent)
+        out["samples"] = comfy.nested_tensor.NestedTensor(tuple(members))
+        out["noise_mask"] = comfy.nested_tensor.NestedTensor(
+            (torch.ones_like(members[0]), torch.zeros_like(members[1]))
+        )
+        return model, out
+
+
+class MiniMaxH3EasyReplaceVideoFrames:
+    CATEGORY = "MiniMax H3 Easy/Face Refine"
+    FUNCTION = "replace"
+    RETURN_TYPES = ("VIDEO",)
+    RETURN_NAMES = ("video",)
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"video": ("VIDEO",), "images": ("IMAGE",)}}
+
+    @staticmethod
+    def replace(video, images):
+        components = video.get_components()
+        if int(images.shape[0]) != int(components.images.shape[0]):
+            raise ValueError(
+                f"Face-refined frame count {images.shape[0]} does not match source video "
+                f"frame count {components.images.shape[0]}"
+            )
+        output = InputImpl.VideoFromComponents(
+            Types.VideoComponents(
+                images=images,
+                audio=components.audio,
+                frame_rate=components.frame_rate,
+                metadata=getattr(components, "metadata", None),
+                alpha=getattr(components, "alpha", None),
+            ),
+            bit_depth=video.get_bit_depth(),
+        )
+        return (output,)
+
+
+class MiniMaxH3EasyFaceRefine:
+    CATEGORY = "MiniMax H3 Easy"
+    FUNCTION = "refine"
+    RETURN_TYPES = ("VIDEO", "STRING")
+    RETURN_NAMES = ("video", "report")
+    DESCRIPTION = (
+        "Track distant faces, regenerate stabilised face crops with MiniMax H3, and stitch "
+        "them back while preserving the source video's audio, FPS and metadata."
+    )
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        loras = _face_refine_lora_choices()
+        samplers = _face_refine_sampler_choices()
+        schedulers = _face_refine_scheduler_choices()
+        positions = ["自动（最大脸）", "最左人物", "左起第2人", "左起第3人", "最右人物"]
+        return {
+            "required": {
+                "video": ("VIDEO",),
+                "h3_bundle": ("MINIMAX_H3_BUNDLE",),
+                "h3_context": ("MINIMAX_H3_CONTEXT",),
+                "subject_mode": ([FACE_REFINE_SINGLE, FACE_REFINE_TWO], {"default": FACE_REFINE_SINGLE}),
+                "detector": (_face_refine_detector_choices(),),
+                "turbo_lora": (loras, {"default": loras[0]}),
+                "lora_strength": ("FLOAT", {"default": 0.75, "min": 0.0, "max": 2.0, "step": 0.05}),
+                "steps": ("INT", {"default": 0, "min": 0, "max": 30, "step": 1}),
+                "denoise": ("FLOAT", {"default": 0.32, "min": 0.01, "max": 1.0, "step": 0.01}),
+                "sampler": (samplers, {"default": "res_multistep" if "res_multistep" in samplers else samplers[0]}),
+                "scheduler": (schedulers, {"default": "simple" if "simple" in schedulers else schedulers[0]}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF}),
+                "identity_position_1": (positions, {"default": positions[0]}),
+                "identity_position_2": (positions, {"default": positions[0]}),
+            },
+            "optional": {
+                "identity_reference_1": ("IMAGE",),
+                "identity_reference_2": ("IMAGE",),
+                "optimized_prompt": ("STRING", {"forceInput": True}),
+            },
+        }
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("nan")
+
+    @staticmethod
+    def refine(
+        video,
+        h3_bundle,
+        h3_context,
+        subject_mode,
+        detector,
+        turbo_lora,
+        lora_strength,
+        steps,
+        denoise,
+        sampler,
+        scheduler,
+        seed,
+        identity_position_1,
+        identity_position_2,
+        identity_reference_1=None,
+        identity_reference_2=None,
+        optimized_prompt=None,
+    ):
+        if not isinstance(h3_bundle, MiniMaxH3Bundle):
+            raise ValueError("Connect the H3 Bundle output from MiniMax H3 Easy Loader")
+        if not isinstance(h3_context, MiniMaxH3Context):
+            raise ValueError("Connect the H3 Context output from MiniMax H3 Easy")
+        if _is_none_model(h3_bundle.ref2va_model_name):
+            raise ValueError("Distant-face refinement requires a model selected in the REF2VA slot")
+
+        components = video.get_components()
+        frames = components.images
+        if int(frames.shape[0]) < 5:
+            raise ValueError("Distant-face refinement requires at least five video frames")
+        fps = float(components.frame_rate or h3_context.fps or h3.FPS)
+        if abs(fps - h3.FPS) > 0.01:
+            raise ValueError(
+                f"Distant-face refinement requires a 24 FPS source, received {fps:g} FPS. "
+                "Place this node before frame interpolation."
+            )
+        if subject_mode == FACE_REFINE_TWO and (
+            identity_reference_1 is None or identity_reference_2 is None
+        ):
+            raise ValueError("Two-person refinement requires both identity reference inputs")
+
+        while isinstance(optimized_prompt, (list, tuple)):
+            optimized_prompt = optimized_prompt[0] if optimized_prompt else None
+        prompt = str(optimized_prompt or h3_context.prompt or "").strip()
+        effective_steps = _face_refine_step_count(turbo_lora, steps)
+
+        g = GraphBuilder()
+        model = h3_bundle.model_for("ref2va")
+        if not _is_none_model(turbo_lora) and float(lora_strength) > 0:
+            model = g.node(
+                "LoraLoaderModelOnly",
+                model=model,
+                lora_name=turbo_lora,
+                strength_model=float(lora_strength),
+            ).out(0)
+
+        sampler_node = g.node("KSamplerSelect", sampler_name=str(sampler))
+        identities = [(identity_reference_1, identity_position_1)]
+        if subject_mode == FACE_REFINE_TWO:
+            identities.append((identity_reference_2, identity_position_2))
+
+        final_images = frames
+        last_report = None
+        for subject_index, (identity_image, identity_position) in enumerate(identities):
+            identity_face = None
+            if identity_image is not None:
+                identity_face = g.node(
+                    "MiniMaxH3EasySelectIdentityFace",
+                    image=identity_image,
+                    detector=detector,
+                    selection=identity_position,
+                    confidence=0.35,
+                    padding=0.55,
+                ).out(0)
+
+            tracker_inputs = {
+                "images": final_images,
+                "detector": detector,
+                "confidence": 0.35,
+                "crop_factor": 2.5,
+                "canvas_width": 512,
+                "canvas_height": 512,
+                "canvas_mode": "auto_capped_768",
+                "smooth_window": 11,
+                "size_smooth_window": 81,
+                "smooth_method": "gaussian",
+                "size_mode": "per_frame",
+                "identity_track": True,
+                "identity_threshold": 0.28,
+                "select": "largest",
+                "fallback_detector": "none",
+                "fallback_head_frac": 0.5,
+            }
+            if identity_face is not None:
+                tracker_inputs["identity_reference"] = identity_face
+            tracker = g.node("MiniMaxH3EasyFaceTrackCrop", **tracker_inputs)
+            last_report = tracker.out(3)
+
+            condition_inputs = _face_refine_condition_inputs(
+                h3_bundle,
+                h3_context,
+                prompt,
+                tracker.out(4),
+                tracker.out(5),
+                int(frames.shape[0]),
+                identity_face,
+            )
+            prepared = g.node("MiniMaxH3ReferenceToVideo", **condition_inputs)
+            injected = g.node(
+                "MiniMaxH3EasyInjectVideoLatent",
+                av_latent=prepared.out(1),
+                images=tracker.out(0),
+                vae=h3_bundle.video_vae,
+            )
+
+            active_model = model
+            active_latent = injected.out(0)
+            if components.audio is not None:
+                audio_locked = g.node(
+                    "MiniMaxH3EasyAudioLock",
+                    model=active_model,
+                    av_latent=active_latent,
+                    audio_vae=h3_bundle.audio_vae,
+                    audio=components.audio,
+                )
+                active_model = audio_locked.out(0)
+                active_latent = audio_locked.out(1)
+
+            per_frame = g.node(
+                "MiniMaxH3EasyPerFrameDenoise",
+                av_latent=active_latent,
+                transform=tracker.out(1),
+                strength_small_face=0.80,
+                strength_large_face=0.30,
+                scale_mode="absolute_px",
+                face_px_small=30.0,
+                face_px_large=120.0,
+                gamma=1.0,
+                smooth_frames=25,
+            )
+            guider = g.node("BasicGuider", model=active_model, conditioning=prepared.out(0))
+            sigmas = g.node(
+                "BasicScheduler",
+                model=active_model,
+                scheduler=str(scheduler),
+                steps=effective_steps,
+                denoise=float(denoise),
+            )
+            noise = g.node("RandomNoise", noise_seed=(int(seed) + subject_index) & 0xFFFFFFFFFFFFFFFF)
+            sampled = g.node(
+                "SamplerCustomAdvanced",
+                noise=noise.out(0),
+                guider=guider.out(0),
+                sampler=sampler_node.out(0),
+                sigmas=sigmas.out(0),
+                latent_image=per_frame.out(0),
+            )
+            decoded = g.node("VAEDecode", samples=sampled.out(0), vae=h3_bundle.video_vae)
+            stitched = g.node(
+                "MiniMaxH3EasyFaceStitch",
+                base_images=final_images,
+                refined_crops=decoded.out(0),
+                transform=tracker.out(1),
+                paste_region="face_only",
+                mask_dilation=24,
+                feather=28,
+                colour_match=1.0,
+                blend=0.80,
+                undetected_frames="fade_out",
+                feather_scales_with_crop=False,
+            )
+            final_images = stitched.out(0)
+
+        output_video = g.node("MiniMaxH3EasyReplaceVideoFrames", video=video, images=final_images)
+        return {
+            "result": (output_video.out(0), last_report),
+            "expand": g.finalize(),
+        }
+
+
 def _per_second_frame_indices(seconds: float, fps: float, frame_count: int) -> list[int]:
     seconds = float(seconds)
     fps = float(fps)
@@ -1154,6 +1574,9 @@ NODE_CLASS_MAPPINGS = {
     "MiniMaxH3EasyLoader": MiniMaxH3EasyLoader,
     "MiniMaxH3Easy": MiniMaxH3Easy,
     "MiniMaxH3EasyOutput": MiniMaxH3EasyOutput,
+    "MiniMaxH3EasyFaceRefine": MiniMaxH3EasyFaceRefine,
+    "MiniMaxH3EasyAudioLock": MiniMaxH3EasyAudioLock,
+    "MiniMaxH3EasyReplaceVideoFrames": MiniMaxH3EasyReplaceVideoFrames,
     "MiniMaxH3EasySaveVideo": MiniMaxH3EasySaveVideo,
     "MiniMaxH3EasyFrameInterpolation": MiniMaxH3EasyFrameInterpolation,
 }

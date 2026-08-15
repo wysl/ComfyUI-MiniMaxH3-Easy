@@ -13,6 +13,17 @@ hard to read and harder to learn.
 
 ## Updates
 
+### 2026-08-16
+
+- Added **MiniMax H3 Easy Distant Face Refine**, which tracks small faces per frame,
+  regenerates stabilised face crops with H3, and stitches them back with temporal
+  smoothing, colour matching, and feathered masks.
+- The node supports one or two people, preserves the source video's audio, FPS,
+  metadata, alpha channel, and bit depth, and expands into ordinary ComfyUI nodes
+  so model caching and VRAM management remain visible to the execution engine.
+- H3 Turbo LoRA step counts are detected from names such as `4step` and `8step`;
+  manual step selection remains available.
+
 ### 2026-08-13
 
 - Added **MiniMax H3 Easy Frame Interpolation**, which uses WhiteRabbit RIFE 4.7 to double the input video's FPS.
@@ -116,6 +127,8 @@ The all-in-one loader exposes separate choices for:
 
 Official and common community filename variants are recognized, including
 BF16, FP8, INT8, INT4, NVFP4, NF4, and GGUF releases.
+Both transformer selectors expose every weight whose relative filename contains
+`h3`, so community exports without an explicit FL2VA or Ref2VA suffix remain selectable.
 
 To use only one transformer model, set the other model selector to `None`. The
 remaining model will automatically be used for text-to-video,
@@ -161,6 +174,36 @@ Assistant integration, connect the workflow as follows:
 
 When `Optimized prompt` is not connected, the original Conditioning is used
 unchanged, preserving existing workflows.
+
+### MiniMax H3 Easy Distant Face Refine
+
+Connect the generated `VIDEO`, the same loader `H3 Bundle`, and the matching
+generation `H3 Context`. The node detects and stabilises distant faces, performs
+a local H3 img2img pass on the crops, and returns a `VIDEO` with its original
+audio, FPS, metadata, alpha channel, and bit depth intact.
+
+- Run it on the original `24 FPS` H3 video, before frame interpolation.
+- `single person` works without an identity image when the intended subject is
+  the only or largest face. An optional identity reference locks tracking in crowds.
+- `two people` requires both identity reference inputs. Each person is refined in
+  sequence so the first composite is retained while the second person is processed.
+- `steps=0` detects `4step` or `8step` from the selected Turbo LoRA filename. It
+  falls back to 20 steps without a Turbo LoRA.
+- Connecting Prompt Assistant's fusion prompt to `Optimized prompt` makes the
+  refinement pass use the same optimized scene description.
+
+Required runtime assets:
+
+- `face_yolov8m.pt` under `models/ultralytics/bbox/` (or another detector shown
+  by the node);
+- a Ref2VA transformer selected in **MiniMax H3 Easy Loader**;
+- an H3 Turbo LoRA is recommended for speed but not mandatory;
+- InsightFace `buffalo_l` is used for identity tracking and may be downloaded on
+  first use. Install only one ONNX Runtime variant to avoid provider conflicts.
+
+This feature is adapted from
+[`ComfyUI-H3-FaceRefine`](https://github.com/Carasibana/ComfyUI-H3-FaceRefine)
+under the MIT License. See `THIRD_PARTY_NOTICES.md`.
 
 ### MiniMax H3 Easy Save Video
 
