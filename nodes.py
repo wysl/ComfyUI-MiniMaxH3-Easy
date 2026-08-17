@@ -48,6 +48,10 @@ NONE_MODEL_DISPLAY_VALUES = (NONE_MODEL, "None", "无")
 NONE_MODEL_ALIASES = {value.lower() for value in NONE_MODEL_DISPLAY_VALUES}
 FACE_REFINE_SINGLE = "single person"
 FACE_REFINE_TWO = "two people"
+FACE_REFINE_PROMPT_IDENTITY_ONLY = "identity only (recommended)"
+FACE_REFINE_PROMPT_FULL_SCENE = "full scene prompt"
+FACE_REFINE_SEED_IDENTITY_LOCKED = "identity locked (recommended)"
+FACE_REFINE_SEED_INPUT = "input seed"
 RESOLUTION_360 = "360P"
 RESOLUTION_416 = "416P"
 RESOLUTION_480 = "480P"
@@ -1006,17 +1010,99 @@ class MiniMaxH3EasyOutput:
         )
 
 
-def _face_refine_prompt(prompt: str, identity_reference: bool) -> str:
+def _face_refine_prompt(
+    prompt: str,
+    identity_reference: bool,
+    prompt_mode: str = FACE_REFINE_PROMPT_IDENTITY_ONLY,
+) -> str:
     prompt = str(prompt or "").strip()
     if not identity_reference:
         return prompt
-    prompt = re.sub(r"<(?:Picture|Video|Audio)\s+\d+>", "", prompt, flags=re.IGNORECASE)
-    prompt = re.sub(r"\n{3,}", "\n\n", prompt).strip()
+
     instruction = (
-        "Preserve the facial identity from <Picture 1>, the original head pose, expression, "
-        "lighting, motion and temporal continuity. Refine facial details only."
+        "Refine facial details only. Preserve the exact facial identity from <Picture 1> "
+        "and the source video, including facial geometry, proportions, skin tone, exposure, "
+        "head pose, expression, gaze, lighting, motion and temporal continuity. Do not alter "
+        "the hairstyle, clothing, background, camera, composition or scene lighting."
     )
-    return f"<Picture 1>\n{prompt}\n{instruction}" if prompt else f"<Picture 1>\n{instruction}"
+    if prompt_mode == FACE_REFINE_PROMPT_FULL_SCENE:
+        prompt = re.sub(
+            r"<(?:Picture|Video|Audio)\s+\d+>",
+            "",
+            prompt,
+            flags=re.IGNORECASE,
+        )
+        prompt = re.sub(r"\n{3,}", "\n\n", prompt).strip()
+        if prompt:
+            return f"<Picture 1>\n{prompt}\n{instruction}"
+    return f"<Picture 1>\n{instruction}"
+
+
+def _face_refine_seed(
+    seed: int,
+    seed_mode: str,
+    identity_reference,
+    subject_index: int = 0,
+) -> int:
+    input_seed = (int(seed) + int(subject_index)) & 0xFFFFFFFFFFFFFFFF
+    if (
+        seed_mode != FACE_REFINE_SEED_IDENTITY_LOCKED
+        or not isinstance(identity_reference, torch.Tensor)
+        or identity_reference.ndim != 4
+        or identity_reference.shape[0] < 1
+        or identity_reference.shape[1] < 1
+        or identity_reference.shape[2] < 1
+        or identity_reference.shape[3] < 1
+    ):
+        return input_seed
+
+    height = int(identity_reference.shape[1])
+    width = int(identity_reference.shape[2])
+    channels = min(3, int(identity_reference.shape[3]))
+    sample_height = min(8, height)
+    sample_width = min(8, width)
+    y_indices = torch.linspace(
+        0,
+        height - 1,
+        sample_height,
+        device=identity_reference.device,
+    ).round().to(dtype=torch.long)
+    x_indices = torch.linspace(
+        0,
+        width - 1,
+        sample_width,
+        device=identity_reference.device,
+    ).round().to(dtype=torch.long)
+    sampled = (
+        identity_reference[0]
+        .index_select(0, y_indices)
+        .index_select(1, x_indices)
+    )
+    quantized = (
+        sampled[..., :channels]
+        .detach()
+        .to(dtype=torch.float32)
+        .clamp(0.0, 1.0)
+        .mul(255.0)
+        .round()
+        .to(device="cpu", dtype=torch.int64)
+        .reshape(-1)
+    )
+    weights = torch.arange(1, quantized.numel() + 1, dtype=torch.int64)
+    checksum = int((quantized * weights).sum().item())
+    mixed = (
+        checksum
+        ^ (height << 32)
+        ^ width
+        ^ (channels << 48)
+        ^ ((int(subject_index) + 1) * 0x9E3779B97F4A7C15)
+    ) & 0xFFFFFFFFFFFFFFFF
+    mixed ^= mixed >> 30
+    mixed = (mixed * 0xBF58476D1CE4E5B9) & 0xFFFFFFFFFFFFFFFF
+    mixed ^= mixed >> 27
+    mixed = (mixed * 0x94D049BB133111EB) & 0xFFFFFFFFFFFFFFFF
+    mixed ^= mixed >> 31
+    return mixed & 0xFFFFFFFFFFFFFFFF
 
 
 def _face_refine_condition_inputs(
@@ -1027,12 +1113,17 @@ def _face_refine_condition_inputs(
     height,
     length,
     identity_reference=None,
+    prompt_mode=FACE_REFINE_PROMPT_IDENTITY_ONLY,
 ):
     inputs = {
         "clip": h3_bundle.clip,
         "vae": h3_bundle.video_vae,
         "audio_vae": h3_bundle.audio_vae,
-        "prompt": _face_refine_prompt(prompt, identity_reference is not None),
+        "prompt": _face_refine_prompt(
+            prompt,
+            identity_reference is not None,
+            prompt_mode,
+        ),
         "width": width,
         "height": height,
         "length": int(length),
@@ -1193,6 +1284,14 @@ class MiniMaxH3EasyFaceRefine:
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF}),
                 "identity_position_1": (positions, {"default": positions[0]}),
                 "identity_position_2": (positions, {"default": positions[0]}),
+                "prompt_mode": (
+                    [FACE_REFINE_PROMPT_IDENTITY_ONLY, FACE_REFINE_PROMPT_FULL_SCENE],
+                    {"default": FACE_REFINE_PROMPT_IDENTITY_ONLY},
+                ),
+                "seed_mode": (
+                    [FACE_REFINE_SEED_IDENTITY_LOCKED, FACE_REFINE_SEED_INPUT],
+                    {"default": FACE_REFINE_SEED_IDENTITY_LOCKED},
+                ),
             },
             "optional": {
                 "identity_reference_1": ("IMAGE",),
@@ -1221,6 +1320,8 @@ class MiniMaxH3EasyFaceRefine:
         seed,
         identity_position_1,
         identity_position_2,
+        prompt_mode=FACE_REFINE_PROMPT_IDENTITY_ONLY,
+        seed_mode=FACE_REFINE_SEED_IDENTITY_LOCKED,
         identity_reference_1=None,
         identity_reference_2=None,
         optimized_prompt=None,
@@ -1312,6 +1413,7 @@ class MiniMaxH3EasyFaceRefine:
                 tracker.out(5),
                 int(frames.shape[0]),
                 identity_face,
+                prompt_mode,
             )
             prepared = g.node("MiniMaxH3ReferenceToVideo", **condition_inputs)
             injected = g.node(
@@ -1354,7 +1456,15 @@ class MiniMaxH3EasyFaceRefine:
                 steps=effective_steps,
                 denoise=float(denoise),
             )
-            noise = g.node("RandomNoise", noise_seed=(int(seed) + subject_index) & 0xFFFFFFFFFFFFFFFF)
+            noise = g.node(
+                "RandomNoise",
+                noise_seed=_face_refine_seed(
+                    seed,
+                    seed_mode,
+                    identity_image,
+                    subject_index,
+                ),
+            )
             sampled = g.node(
                 "SamplerCustomAdvanced",
                 noise=noise.out(0),

@@ -15,6 +15,8 @@ hard to read and harder to learn.
 
 ### 2026-08-17
 
+- Distant Face Refine now defaults to identity-only prompting when an identity image is connected, preventing later scenes' camera, environment, and lighting instructions from changing facial geometry, skin tone, or exposure.
+- Identity references now derive a stable refinement seed across chained segments. Full-scene prompting and the supplied input seed remain available as compatibility modes.
 - Added **MiniMax H3 Easy Chroma Context**, which extracts the final `1 / 5 / 22 / 39` clean frames and creates a separate tapered chroma-noise context video for the next H3 Motion Context segment.
 - Clean and noisy context outputs remain separate, so chroma noise is never written into the delivered or assembled video.
 - Added optional per-pixel Rec.709 luminance preservation, enabled by default, so chroma noise keeps each context frame's original lighting without flattening motion or exposure changes.
@@ -198,8 +200,14 @@ audio, FPS, metadata, alpha channel, and bit depth intact.
   sequence so the first composite is retained while the second person is processed.
 - `steps=0` detects `4step` or `8step` from the selected Turbo LoRA filename. It
   falls back to 20 steps without a Turbo LoRA.
-- Connecting Prompt Assistant's fusion prompt to `Optimized prompt` makes the
-  refinement pass use the same optimized scene description.
+- With an identity reference connected, `prompt_mode` defaults to
+  `identity only (recommended)` and excludes scene, camera, and lighting changes
+  from the local face redraw.
+- `seed_mode` defaults to `identity locked (recommended)`, deriving the same
+  refinement seed from the identity image across chained segments.
+- Select `full scene prompt` and `input seed` to restore the previous behaviour.
+  Prompt Assistant's `Optimized prompt` scene description is only submitted in
+  full-scene mode.
 
 Required runtime assets:
 

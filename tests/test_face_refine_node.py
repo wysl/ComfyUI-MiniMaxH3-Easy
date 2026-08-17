@@ -6,6 +6,9 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 
+import torch
+import torch.nn.functional as functional
+
 
 PROJECT_ROOT = Path(__file__).parents[1]
 
@@ -79,21 +82,29 @@ class FakeVideo:
 def load_face_refine_symbols():
     source_path = PROJECT_ROOT / "nodes.py"
     tree = ast.parse(source_path.read_text(encoding="utf-8"))
-    names = {"_face_refine_step_count", "MiniMaxH3EasyFaceRefine"}
+    names = {
+        "_face_refine_prompt",
+        "_face_refine_seed",
+        "_face_refine_step_count",
+        "MiniMaxH3EasyFaceRefine",
+    }
     definitions = [
         node
         for node in tree.body
         if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in names
     ]
     module = ast.fix_missing_locations(ast.Module(body=definitions, type_ignores=[]))
-    namespace = {
-        "FACE_REFINE_SINGLE": "single person",
-        "FACE_REFINE_TWO": "two people",
-        "NONE_MODEL_ALIASES": {"none", "无"},
-        "GraphBuilder": FakeGraphBuilder,
-        "MiniMaxH3Bundle": MiniMaxH3Bundle,
-        "MiniMaxH3Context": MiniMaxH3Context,
-        "_face_refine_condition_inputs": lambda bundle, context, prompt, width, height, length, identity: {
+    def fake_condition_inputs(
+        bundle,
+        context,
+        prompt,
+        width,
+        height,
+        length,
+        identity,
+        prompt_mode=None,
+    ):
+        return {
             "clip": bundle.clip,
             "vae": bundle.video_vae,
             "audio_vae": bundle.audio_vae,
@@ -101,13 +112,28 @@ def load_face_refine_symbols():
             "width": width,
             "height": height,
             "length": length,
-        },
+        }
+
+    namespace = {
+        "FACE_REFINE_SINGLE": "single person",
+        "FACE_REFINE_TWO": "two people",
+        "FACE_REFINE_PROMPT_IDENTITY_ONLY": "identity only (recommended)",
+        "FACE_REFINE_PROMPT_FULL_SCENE": "full scene prompt",
+        "FACE_REFINE_SEED_IDENTITY_LOCKED": "identity locked (recommended)",
+        "FACE_REFINE_SEED_INPUT": "input seed",
+        "NONE_MODEL_ALIASES": {"none", "无"},
+        "GraphBuilder": FakeGraphBuilder,
+        "MiniMaxH3Bundle": MiniMaxH3Bundle,
+        "MiniMaxH3Context": MiniMaxH3Context,
+        "_face_refine_condition_inputs": fake_condition_inputs,
         "_face_refine_detector_choices": lambda: ["face_yolov8m.pt"],
         "_face_refine_lora_choices": lambda: ["minimax_h3_turbo_8step.safetensors", "none"],
         "_face_refine_sampler_choices": lambda: ["res_multistep", "euler"],
         "_face_refine_scheduler_choices": lambda: ["simple"],
         "_is_none_model": lambda value: str(value).lower() in {"none", "无"},
         "h3": SimpleNamespace(FPS=24),
+        "torch": torch,
+        "functional": functional,
         "re": re,
     }
     exec(compile(module, str(source_path), "exec"), namespace)
@@ -194,6 +220,65 @@ class FaceRefineNodeTests(unittest.TestCase):
     def test_rejects_post_interpolation_video(self):
         with self.assertRaisesRegex(ValueError, "before frame interpolation"):
             self.refine(video=FakeVideo(fps=48.0))
+
+    def test_identity_prompt_ignores_scene_changes_by_default(self):
+        prompt = self.symbols["_face_refine_prompt"](
+            "High angle, bright golden scene with a new camera move.",
+            True,
+        )
+
+        self.assertNotIn("High angle", prompt)
+        self.assertIn("Preserve the exact facial identity", prompt)
+        self.assertIn("Do not alter", prompt)
+
+    def test_full_scene_prompt_mode_remains_available(self):
+        prompt = self.symbols["_face_refine_prompt"](
+            "<Picture 8> High angle continuation.",
+            True,
+            "full scene prompt",
+        )
+
+        self.assertIn("High angle continuation.", prompt)
+        self.assertNotIn("<Picture 8>", prompt)
+        self.assertTrue(prompt.startswith("<Picture 1>"))
+
+    def test_identity_locked_seed_is_stable_across_segment_seeds(self):
+        identity = torch.linspace(0.0, 1.0, 32 * 24 * 3).reshape(1, 32, 24, 3)
+        seed_for_segment_1 = self.symbols["_face_refine_seed"](
+            31001,
+            "identity locked (recommended)",
+            identity,
+        )
+        seed_for_segment_3 = self.symbols["_face_refine_seed"](
+            31003,
+            "identity locked (recommended)",
+            identity,
+        )
+
+        self.assertEqual(seed_for_segment_1, seed_for_segment_3)
+
+    def test_input_seed_mode_preserves_existing_seed_control(self):
+        identity = torch.zeros((1, 16, 16, 3))
+        resolved = self.symbols["_face_refine_seed"](
+            31003,
+            "input seed",
+            identity,
+            subject_index=1,
+        )
+
+        self.assertEqual(resolved, 31004)
+
+    def test_identity_lock_defaults_are_exposed(self):
+        required = self.node.INPUT_TYPES()["required"]
+
+        self.assertEqual(
+            required["prompt_mode"][1]["default"],
+            "identity only (recommended)",
+        )
+        self.assertEqual(
+            required["seed_mode"][1]["default"],
+            "identity locked (recommended)",
+        )
 
 
 if __name__ == "__main__":
