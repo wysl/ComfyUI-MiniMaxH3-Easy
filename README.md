@@ -13,6 +13,12 @@ hard to read and harder to learn.
 
 ## Updates
 
+### 2026-08-17
+
+- Added **MiniMax H3 Easy Chroma Context**, which extracts the final `1 / 5 / 22 / 39` clean frames and creates a separate tapered chroma-noise context video for the next H3 Motion Context segment.
+- Clean and noisy context outputs remain separate, so chroma noise is never written into the delivered or assembled video.
+- The node uses the existing PyTorch and ComfyUI VIDEO APIs and adds no Python dependency.
+
 ### 2026-08-16
 
 - Added **MiniMax H3 Easy Distant Face Refine**, which tracks small faces per frame,

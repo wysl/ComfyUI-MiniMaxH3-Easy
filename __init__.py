@@ -1,6 +1,7 @@
 from .nodes import (
     MiniMaxH3Easy,
     MiniMaxH3EasyAudioLock,
+    MiniMaxH3EasyChromaContext,
     MiniMaxH3EasyFaceRefine,
     MiniMaxH3EasyFrameInterpolation,
     MiniMaxH3EasyLoader,
@@ -23,6 +24,7 @@ NODE_CLASS_MAPPINGS = {
     "MiniMaxH3EasyReplaceVideoFrames": MiniMaxH3EasyReplaceVideoFrames,
     "MiniMaxH3EasySaveVideo": MiniMaxH3EasySaveVideo,
     "MiniMaxH3EasyFrameInterpolation": MiniMaxH3EasyFrameInterpolation,
+    "MiniMaxH3EasyChromaContext": MiniMaxH3EasyChromaContext,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -35,6 +37,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3EasyReplaceVideoFrames": "MiniMax H3 Easy Replace Video Frames",
     "MiniMaxH3EasySaveVideo": "MiniMax H3 Easy Save Video",
     "MiniMaxH3EasyFrameInterpolation": "MiniMax H3 Easy Frame Interpolation",
+    "MiniMaxH3EasyChromaContext": "MiniMax H3 Easy Chroma Context",
 }
 
 WEB_DIRECTORY = "./web"

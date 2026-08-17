@@ -12,6 +12,12 @@
 
 ## 更新内容
 
+### 2026-08-17
+
+- 新增 **MiniMax H3 Easy 彩噪上下文** 节点：提取干净视频的末尾 `1 / 5 / 22 / 39` 帧，并生成带渐退彩噪的独立上下文视频，供长视频循环的下一段 H3 Motion Context 使用；
+- 干净上下文和彩噪上下文分路输出，彩噪不会写入最终保存和拼接的视频；
+- 节点仅使用现有 PyTorch 与 ComfyUI VIDEO API，不新增 Python 依赖。
+
 ### 2026-08-16
 
 - 新增 **MiniMax H3 Easy 远景人脸修复** 节点：逐帧追踪远景小脸，将稳定裁剪交给 H3 局部二次生成，再通过时序平滑、颜色匹配和羽化蒙版贴回原视频；
@@ -201,6 +207,17 @@ FL2VA，参考生视频优先使用 Ref2VA。两种主模型不能同时设置�
 该节点不新增 Python 依赖，但需要 ComfyUI 中已安装并启用
 [`comfyui-WhiteRabbit`](https://github.com/Artificial-Sweetener/comfyui-WhiteRabbit)，且其
 `rife47.pth` 模型可用。缺失依赖时，节点会给出明确的安装提示。
+
+### MiniMax H3 Easy 彩噪上下文
+
+将每个片段人脸修复后的干净 `VIDEO` 接入此节点。节点截取末尾上下文帧并输出：
+
+- `clean_context`：未加噪的干净尾帧视频；
+- `noisy_context`：添加块状彩噪并在最后几帧逐步减弱的尾帧视频，只用于下一段 H3 Motion Context。
+
+长视频循环中，最终片段保存仍应使用原始干净视频；仅将 `noisy_context` 拆成图片后送入
+Context Loop 的 `Loop End.images`。默认使用 `22` 帧、`start_alpha=0.45`、
+`end_alpha=0.10`、`taper_frames=3`。不要把已经加噪的输出再次接回该节点。
 
 采样器、加速节点和其他视频/音频处理节点仍然放在外部，方便继续使用 ComfyUI 生态中的其他节点。
 

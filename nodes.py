@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import os
+import random
 import re
 import sys
 import threading
@@ -19,6 +20,7 @@ from functools import lru_cache, partial
 from typing import Any
 
 import torch
+import torch.nn.functional as functional
 import torchaudio
 
 import comfy.nested_tensor
@@ -1413,6 +1415,186 @@ def _extract_video_output_frames(frames, seconds: float, fps: float):
     return frames[indexes], frames[-1:]
 
 
+H3_CHROMA_CONTEXT_FRAME_OPTIONS = ("1", "5", "22", "39")
+H3_CHROMA_PALETTE = (
+    (185, 115, 215),
+    (115, 195, 140),
+    (150, 148, 162),
+    (205, 150, 192),
+    (138, 182, 148),
+    (160, 120, 175),
+)
+H3_CHROMA_GRID = (36, 64)
+
+
+def _h3_chroma_taper_alphas(
+    context_frames: int,
+    start_alpha: float,
+    end_alpha: float,
+    taper_frames: int,
+) -> tuple[float, ...]:
+    if context_frames < 1:
+        raise ValueError("context_frames must be positive")
+    if taper_frames < 1 or taper_frames > context_frames:
+        raise ValueError("taper_frames must be between 1 and context_frames")
+    if not 0.0 <= start_alpha <= 1.0 or not 0.0 <= end_alpha <= 1.0:
+        raise ValueError("start_alpha and end_alpha must be between 0 and 1")
+    if end_alpha > start_alpha:
+        raise ValueError("end_alpha must not exceed start_alpha for a taper")
+
+    alphas = []
+    for position in range(context_frames):
+        from_end = context_frames - 1 - position
+        if from_end >= taper_frames:
+            alphas.append(start_alpha)
+            continue
+        amount = start_alpha + (end_alpha - start_alpha) * (
+            taper_frames - from_end
+        ) / taper_frames
+        alphas.append(amount)
+    return tuple(alphas)
+
+
+def _prepare_h3_chroma_context(
+    images: torch.Tensor,
+    context_frames: int = 22,
+    start_alpha: float = 0.45,
+    end_alpha: float = 0.10,
+    taper_frames: int = 3,
+    seed: int = 0,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    alphas = _h3_chroma_taper_alphas(
+        context_frames,
+        start_alpha,
+        end_alpha,
+        taper_frames,
+    )
+    if not isinstance(images, torch.Tensor):
+        raise TypeError("VIDEO images must be a torch.Tensor")
+    if images.ndim != 4 or images.shape[-1] != 3:
+        raise ValueError("VIDEO images must use [frames, height, width, 3] layout")
+    if not images.is_floating_point():
+        raise TypeError("VIDEO images must use a floating-point dtype")
+    if images.shape[0] < context_frames:
+        raise ValueError(
+            f"The source VIDEO has {images.shape[0]} frames, but "
+            f"context_frames={context_frames} was requested"
+        )
+    if images.shape[1] < 1 or images.shape[2] < 1:
+        raise ValueError("VIDEO images must have a positive height and width")
+
+    clean_context = images[-context_frames:].contiguous()
+    noisy_context = clean_context.clone()
+    rng = random.Random(int(seed))
+    grid_width, grid_height = H3_CHROMA_GRID
+    palette = torch.tensor(H3_CHROMA_PALETTE, dtype=torch.float32).div_(255.0)
+
+    for frame_index, alpha in enumerate(alphas):
+        palette_indexes = torch.tensor(
+            [
+                rng.randrange(len(H3_CHROMA_PALETTE))
+                for _ in range(grid_width * grid_height)
+            ],
+            dtype=torch.long,
+        ).reshape(grid_height, grid_width)
+        grid = palette[palette_indexes].permute(2, 0, 1).unsqueeze(0)
+        noise = functional.interpolate(
+            grid,
+            size=(images.shape[1], images.shape[2]),
+            mode="nearest",
+        ).squeeze(0).permute(1, 2, 0)
+        noise = noise.to(device=images.device, dtype=images.dtype)
+        noisy_context[frame_index].mul_(1.0 - alpha).add_(noise, alpha=alpha)
+
+    return clean_context, noisy_context.clamp_(0.0, 1.0)
+
+
+class MiniMaxH3EasyChromaContext:
+    CATEGORY = "MiniMax H3 Easy"
+    FUNCTION = "create_context"
+    RETURN_TYPES = ("VIDEO", "VIDEO")
+    RETURN_NAMES = ("clean_context", "noisy_context")
+    DESCRIPTION = (
+        "Extract the clean tail of a video and create a tapered chroma-noise "
+        "copy for the next MiniMax H3 Motion Context segment."
+    )
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "video": ("VIDEO",),
+                "context_frames": (
+                    list(H3_CHROMA_CONTEXT_FRAME_OPTIONS),
+                    {"default": "22"},
+                ),
+                "start_alpha": (
+                    "FLOAT",
+                    {"default": 0.45, "min": 0.0, "max": 1.0, "step": 0.01},
+                ),
+                "end_alpha": (
+                    "FLOAT",
+                    {"default": 0.10, "min": 0.0, "max": 1.0, "step": 0.01},
+                ),
+                "taper_frames": (
+                    "INT",
+                    {"default": 3, "min": 1, "max": 39, "step": 1},
+                ),
+                "seed": (
+                    "INT",
+                    {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF},
+                ),
+            }
+        }
+
+    @staticmethod
+    def create_context(
+        video,
+        context_frames="22",
+        start_alpha=0.45,
+        end_alpha=0.10,
+        taper_frames=3,
+        seed=0,
+    ):
+        try:
+            frame_count = int(context_frames)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Unsupported H3 context frame count: {context_frames!r}"
+            ) from exc
+        if str(frame_count) not in H3_CHROMA_CONTEXT_FRAME_OPTIONS:
+            raise ValueError("context_frames must be one of 1, 5, 22 or 39")
+
+        try:
+            components = video.get_components()
+            frame_rate = Fraction(components.frame_rate)
+        except (AttributeError, TypeError, ValueError, RuntimeError) as exc:
+            raise RuntimeError("Failed to read the input VIDEO") from exc
+
+        clean_images, noisy_images = _prepare_h3_chroma_context(
+            images=components.images,
+            context_frames=frame_count,
+            start_alpha=float(start_alpha),
+            end_alpha=float(end_alpha),
+            taper_frames=int(taper_frames),
+            seed=int(seed),
+        )
+        bit_depth = video.get_bit_depth()
+
+        def make_video(images):
+            return InputImpl.VideoFromComponents(
+                Types.VideoComponents(
+                    images=images,
+                    audio=None,
+                    frame_rate=frame_rate,
+                    metadata=getattr(components, "metadata", None),
+                ),
+                bit_depth=bit_depth,
+            )
+
+        return make_video(clean_images), make_video(noisy_images)
+
+
 class MiniMaxH3EasySaveVideo:
     CATEGORY = "MiniMax H3 Easy"
     FUNCTION = "save"
@@ -1579,4 +1761,5 @@ NODE_CLASS_MAPPINGS = {
     "MiniMaxH3EasyReplaceVideoFrames": MiniMaxH3EasyReplaceVideoFrames,
     "MiniMaxH3EasySaveVideo": MiniMaxH3EasySaveVideo,
     "MiniMaxH3EasyFrameInterpolation": MiniMaxH3EasyFrameInterpolation,
+    "MiniMaxH3EasyChromaContext": MiniMaxH3EasyChromaContext,
 }
