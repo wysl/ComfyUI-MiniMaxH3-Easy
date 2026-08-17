@@ -17,6 +17,7 @@ hard to read and harder to learn.
 
 - Added **MiniMax H3 Easy Chroma Context**, which extracts the final `1 / 5 / 22 / 39` clean frames and creates a separate tapered chroma-noise context video for the next H3 Motion Context segment.
 - Clean and noisy context outputs remain separate, so chroma noise is never written into the delivered or assembled video.
+- Added optional per-pixel Rec.709 luminance preservation, enabled by default, so chroma noise keeps each context frame's original lighting without flattening motion or exposure changes.
 - The node uses the existing PyTorch and ComfyUI VIDEO APIs and adds no Python dependency.
 
 ### 2026-08-16

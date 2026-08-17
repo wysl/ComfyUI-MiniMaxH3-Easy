@@ -1425,6 +1425,7 @@ H3_CHROMA_PALETTE = (
     (160, 120, 175),
 )
 H3_CHROMA_GRID = (36, 64)
+H3_LUMA_WEIGHTS = (0.2126, 0.7152, 0.0722)
 
 
 def _h3_chroma_taper_alphas(
@@ -1455,6 +1456,41 @@ def _h3_chroma_taper_alphas(
     return tuple(alphas)
 
 
+def _h3_luminance(images: torch.Tensor) -> torch.Tensor:
+    weights = images.new_tensor(H3_LUMA_WEIGHTS)
+    return (images * weights).sum(dim=-1, keepdim=True)
+
+
+def _preserve_h3_chroma_luminance(
+    clean_images: torch.Tensor,
+    noisy_images: torch.Tensor,
+) -> torch.Tensor:
+    target_luma = _h3_luminance(clean_images)
+    noisy_luma = _h3_luminance(noisy_images)
+    chroma = noisy_images.sub_(noisy_luma)
+
+    # Keep the noisy chroma direction, but shrink its strength where necessary
+    # so rebuilding it around the clean luma remains inside RGB gamut.
+    epsilon = 1e-6
+    chroma_scale = torch.ones_like(target_luma)
+    for channel_index in range(3):
+        channel = chroma[..., channel_index:channel_index + 1]
+        channel_bound = torch.full_like(target_luma, float("inf"))
+        channel_bound = torch.where(
+            channel > epsilon,
+            (1.0 - target_luma) / channel.clamp_min(epsilon),
+            channel_bound,
+        )
+        channel_bound = torch.where(
+            channel < -epsilon,
+            target_luma / (-channel).clamp_min(epsilon),
+            channel_bound,
+        )
+        torch.minimum(chroma_scale, channel_bound, out=chroma_scale)
+    chroma.mul_(chroma_scale).add_(target_luma).clamp_(0.0, 1.0)
+    return chroma
+
+
 def _prepare_h3_chroma_context(
     images: torch.Tensor,
     context_frames: int = 22,
@@ -1462,6 +1498,7 @@ def _prepare_h3_chroma_context(
     end_alpha: float = 0.10,
     taper_frames: int = 3,
     seed: int = 0,
+    preserve_luminance: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     alphas = _h3_chroma_taper_alphas(
         context_frames,
@@ -1506,6 +1543,11 @@ def _prepare_h3_chroma_context(
         noise = noise.to(device=images.device, dtype=images.dtype)
         noisy_context[frame_index].mul_(1.0 - alpha).add_(noise, alpha=alpha)
 
+    if preserve_luminance:
+        noisy_context = _preserve_h3_chroma_luminance(
+            clean_context,
+            noisy_context,
+        )
     return clean_context, noisy_context.clamp_(0.0, 1.0)
 
 
@@ -1544,6 +1586,13 @@ class MiniMaxH3EasyChromaContext:
                     "INT",
                     {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF},
                 ),
+                "preserve_luminance": (
+                    "BOOLEAN",
+                    {
+                        "default": True,
+                        "tooltip": "Preserve each clean context pixel's Rec.709 luminance while retaining chroma noise.",
+                    },
+                ),
             }
         }
 
@@ -1555,6 +1604,7 @@ class MiniMaxH3EasyChromaContext:
         end_alpha=0.10,
         taper_frames=3,
         seed=0,
+        preserve_luminance=True,
     ):
         try:
             frame_count = int(context_frames)
@@ -1578,6 +1628,7 @@ class MiniMaxH3EasyChromaContext:
             end_alpha=float(end_alpha),
             taper_frames=int(taper_frames),
             seed=int(seed),
+            preserve_luminance=bool(preserve_luminance),
         )
         bit_depth = video.get_bit_depth()
 

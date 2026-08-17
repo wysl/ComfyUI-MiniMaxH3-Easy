@@ -22,7 +22,10 @@ def load_chroma_context_symbols():
         "H3_CHROMA_CONTEXT_FRAME_OPTIONS",
         "H3_CHROMA_PALETTE",
         "H3_CHROMA_GRID",
+        "H3_LUMA_WEIGHTS",
         "_h3_chroma_taper_alphas",
+        "_h3_luminance",
+        "_preserve_h3_chroma_luminance",
         "_prepare_h3_chroma_context",
         "MiniMaxH3EasyChromaContext",
     }
@@ -114,6 +117,36 @@ class ChromaContextNodeTests(unittest.TestCase):
         self.assertIsNone(clean.components.audio)
         self.assertIsNone(noisy.components.audio)
         self.assertEqual(noisy.bit_depth, 10)
+
+    def test_luminance_lock_preserves_brightness_and_chroma_noise(self):
+        prepare = self.symbols["_prepare_h3_chroma_context"]
+        luminance = self.symbols["_h3_luminance"]
+        images = torch.linspace(0.05, 0.95, 30 * 8 * 6 * 3).reshape(30, 8, 6, 3)
+
+        clean, unlocked = prepare(
+            images,
+            context_frames=22,
+            seed=730002,
+            preserve_luminance=False,
+        )
+        _, locked = prepare(
+            images,
+            context_frames=22,
+            seed=730002,
+            preserve_luminance=True,
+        )
+
+        unlocked_error = (luminance(unlocked) - luminance(clean)).abs().mean()
+        locked_error = (luminance(locked) - luminance(clean)).abs().mean()
+        self.assertGreater(unlocked_error.item(), 0.01)
+        self.assertLess(locked_error.item(), 1e-6)
+        self.assertFalse(torch.equal(locked, clean))
+        self.assertGreater((locked - clean).abs().mean().item(), 0.001)
+
+    def test_luminance_lock_is_enabled_by_default(self):
+        config = self.symbols["MiniMaxH3EasyChromaContext"].INPUT_TYPES()
+
+        self.assertTrue(config["required"]["preserve_luminance"][1]["default"])
 
     def test_rejects_more_context_frames_than_video_contains(self):
         prepare = self.symbols["_prepare_h3_chroma_context"]
