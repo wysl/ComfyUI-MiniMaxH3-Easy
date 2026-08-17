@@ -1426,6 +1426,9 @@ H3_CHROMA_PALETTE = (
 )
 H3_CHROMA_GRID = (36, 64)
 H3_LUMA_WEIGHTS = (0.2126, 0.7152, 0.0722)
+H3_SEAM_ANALYSIS_SIZE = 384
+H3_SEAM_MOTION_HISTORY = 4
+H3_SEAM_COLOR_GRID = 8
 
 
 def _h3_chroma_taper_alphas(
@@ -1646,6 +1649,297 @@ class MiniMaxH3EasyChromaContext:
         return make_video(clean_images), make_video(noisy_images)
 
 
+def _h3_phase_peak_offset(values: torch.Tensor, index: int) -> float:
+    size = int(values.shape[0])
+    center = values[index]
+    before = values[(index - 1) % size]
+    after = values[(index + 1) % size]
+    denominator = before - 2.0 * center + after
+    if abs(float(denominator)) < 1e-8:
+        return 0.0
+    offset = 0.5 * (before - after) / denominator
+    return float(offset.clamp(-0.5, 0.5))
+
+
+def _estimate_h3_frame_translation(
+    source: torch.Tensor,
+    target: torch.Tensor,
+    max_analysis_size: int = H3_SEAM_ANALYSIS_SIZE,
+) -> tuple[float, float]:
+    if source.shape != target.shape or source.ndim != 3 or source.shape[-1] != 3:
+        raise ValueError("H3 seam translation requires two matching RGB images")
+
+    height, width = int(source.shape[0]), int(source.shape[1])
+    analysis_height, analysis_width = height, width
+    longest_side = max(height, width)
+    if longest_side > max_analysis_size:
+        scale = max_analysis_size / longest_side
+        analysis_height = max(16, round(height * scale))
+        analysis_width = max(16, round(width * scale))
+
+    pair = torch.stack((source, target)).to(dtype=torch.float32)
+    gray = _h3_luminance(pair).permute(0, 3, 1, 2)
+    if (analysis_height, analysis_width) != (height, width):
+        gray = functional.interpolate(
+            gray,
+            size=(analysis_height, analysis_width),
+            mode="bilinear",
+            align_corners=False,
+            antialias=True,
+        )
+    gray = gray[:, 0]
+    gray = gray - gray.mean(dim=(-2, -1), keepdim=True)
+    window_y = torch.hann_window(
+        analysis_height,
+        periodic=False,
+        device=gray.device,
+        dtype=gray.dtype,
+    )
+    window_x = torch.hann_window(
+        analysis_width,
+        periodic=False,
+        device=gray.device,
+        dtype=gray.dtype,
+    )
+    gray = gray * window_y[:, None] * window_x[None, :]
+
+    source_spectrum = torch.fft.rfft2(gray[0])
+    target_spectrum = torch.fft.rfft2(gray[1])
+    cross_power = target_spectrum * source_spectrum.conj()
+    cross_power = cross_power / cross_power.abs().clamp_min(1e-8)
+    correlation = torch.fft.irfft2(
+        cross_power,
+        s=(analysis_height, analysis_width),
+    ).real
+    flat_index = int(correlation.argmax())
+    peak_y, peak_x = divmod(flat_index, analysis_width)
+    offset_x = _h3_phase_peak_offset(correlation[peak_y], peak_x)
+    offset_y = _h3_phase_peak_offset(correlation[:, peak_x], peak_y)
+    if peak_x > analysis_width // 2:
+        peak_x -= analysis_width
+    if peak_y > analysis_height // 2:
+        peak_y -= analysis_height
+
+    shift_x = (peak_x + offset_x) * width / analysis_width
+    shift_y = (peak_y + offset_y) * height / analysis_height
+    return float(shift_x), float(shift_y)
+
+
+def _translate_h3_frames(
+    images: torch.Tensor,
+    shifts: torch.Tensor,
+) -> torch.Tensor:
+    if images.ndim != 4 or images.shape[-1] != 3:
+        raise ValueError("H3 seam frames must use [frames, height, width, 3] layout")
+    if shifts.shape != (images.shape[0], 2):
+        raise ValueError("H3 seam shifts must use [frames, 2] layout")
+
+    source_dtype = images.dtype
+    working = images.permute(0, 3, 1, 2).to(dtype=torch.float32)
+    shifts = shifts.to(device=working.device, dtype=working.dtype)
+    height, width = int(images.shape[1]), int(images.shape[2])
+    theta = torch.zeros(
+        (images.shape[0], 2, 3),
+        device=working.device,
+        dtype=working.dtype,
+    )
+    theta[:, 0, 0] = 1.0
+    theta[:, 1, 1] = 1.0
+    if width > 1:
+        theta[:, 0, 2] = -2.0 * shifts[:, 0] / (width - 1)
+    if height > 1:
+        theta[:, 1, 2] = -2.0 * shifts[:, 1] / (height - 1)
+    grid = functional.affine_grid(theta, working.shape, align_corners=True)
+    translated = functional.grid_sample(
+        working,
+        grid,
+        mode="bilinear",
+        padding_mode="border",
+        align_corners=True,
+    )
+    return translated.permute(0, 2, 3, 1).to(dtype=source_dtype)
+
+
+def _h3_seam_decay_weights(
+    frame_count: int,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    if frame_count < 1:
+        raise ValueError("H3 seam correction requires at least one frame")
+    if frame_count == 1:
+        return torch.ones(1, device=device, dtype=dtype)
+    positions = torch.linspace(0.0, 1.0, frame_count, device=device, dtype=dtype)
+    return 0.5 * (1.0 + torch.cos(math.pi * positions))
+
+
+def _stabilize_h3_seam(
+    images: torch.Tensor,
+    context_frames: int = 22,
+    correction_frames: int = 12,
+    position_strength: float = 0.5,
+    color_strength: float = 0.75,
+    max_position_shift: float = 4.0,
+    max_color_shift: float = 0.08,
+) -> torch.Tensor:
+    if not isinstance(images, torch.Tensor):
+        raise TypeError("H3 seam input must be a torch.Tensor")
+    if images.ndim != 4 or images.shape[-1] != 3:
+        raise ValueError("H3 seam images must use [frames, height, width, 3] layout")
+    if not images.is_floating_point():
+        raise TypeError("H3 seam images must use a floating-point dtype")
+    if context_frames == 0:
+        return images
+    if context_frames < 0 or context_frames >= int(images.shape[0]):
+        raise ValueError("context_frames must leave at least one generated frame")
+    if correction_frames < 1:
+        raise ValueError("correction_frames must be positive")
+    if not 0.0 <= position_strength <= 1.0:
+        raise ValueError("position_strength must be between 0 and 1")
+    if not 0.0 <= color_strength <= 1.0:
+        raise ValueError("color_strength must be between 0 and 1")
+    if max_position_shift < 0.0 or max_color_shift < 0.0:
+        raise ValueError("H3 seam correction limits must not be negative")
+
+    boundary = int(context_frames)
+    corrected_count = min(int(correction_frames), int(images.shape[0]) - boundary)
+    output = images.clone()
+    reference = images[boundary - 1]
+
+    history_count = min(H3_SEAM_MOTION_HISTORY, boundary - 1)
+    history_shifts = []
+    for frame_index in range(boundary - history_count, boundary):
+        history_shifts.append(
+            _estimate_h3_frame_translation(
+                images[frame_index - 1],
+                images[frame_index],
+            )
+        )
+    if history_shifts:
+        history_tensor = images.new_tensor(history_shifts, dtype=torch.float32)
+        expected_shift = history_tensor.median(dim=0).values
+    else:
+        expected_shift = images.new_zeros(2, dtype=torch.float32)
+
+    actual_shift = images.new_tensor(
+        _estimate_h3_frame_translation(reference, images[boundary]),
+        dtype=torch.float32,
+    )
+    position_correction = (expected_shift - actual_shift) * float(position_strength)
+    position_correction.clamp_(
+        min=-float(max_position_shift),
+        max=float(max_position_shift),
+    )
+    weights = _h3_seam_decay_weights(
+        corrected_count,
+        device=images.device,
+        dtype=torch.float32,
+    )
+    shifts = weights[:, None] * position_correction[None, :]
+    source_frames = images[boundary:boundary + corrected_count]
+    if float(position_correction.abs().max()) > 1e-6:
+        corrected = _translate_h3_frames(source_frames, shifts)
+    else:
+        corrected = source_frames.clone()
+
+    if color_strength > 0.0 and max_color_shift > 0.0:
+        predicted_reference = _translate_h3_frames(
+            reference.unsqueeze(0),
+            expected_shift.reshape(1, 2),
+        )[0].to(dtype=torch.float32)
+        first_corrected = corrected[0].to(dtype=torch.float32)
+        color_delta = (predicted_reference - first_corrected).permute(2, 0, 1).unsqueeze(0)
+        grid_height = min(H3_SEAM_COLOR_GRID, int(images.shape[1]))
+        grid_width = min(H3_SEAM_COLOR_GRID, int(images.shape[2]))
+        color_delta = functional.adaptive_avg_pool2d(
+            color_delta,
+            output_size=(grid_height, grid_width),
+        )
+        color_delta = functional.interpolate(
+            color_delta,
+            size=(int(images.shape[1]), int(images.shape[2])),
+            mode="bilinear",
+            align_corners=False,
+        ).clamp_(-float(max_color_shift), float(max_color_shift))
+        color_delta = color_delta[0].permute(1, 2, 0)
+        color_weights = weights * float(color_strength)
+        corrected = corrected.to(dtype=torch.float32)
+        corrected.add_(color_delta[None, ...] * color_weights[:, None, None, None])
+        corrected.clamp_(0.0, 1.0)
+        corrected = corrected.to(dtype=images.dtype)
+
+    if corrected_count > 1:
+        corrected[-1] = source_frames[-1]
+    output[boundary:boundary + corrected_count] = corrected
+    return output
+
+
+class MiniMaxH3EasySeamStabilizer:
+    CATEGORY = "MiniMax H3 Easy"
+    FUNCTION = "stabilize"
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("images",)
+    DESCRIPTION = (
+        "Stabilize the transition after H3 Motion Context overlap frames, "
+        "then pass the unchanged frame count to the existing trim node."
+    )
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "images": ("IMAGE",),
+                "context_frames": (
+                    "INT",
+                    {"forceInput": True, "min": 0, "max": 39},
+                ),
+                "correction_frames": (
+                    "INT",
+                    {"default": 12, "min": 1, "max": 48, "step": 1},
+                ),
+                "position_strength": (
+                    "FLOAT",
+                    {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05},
+                ),
+                "color_strength": (
+                    "FLOAT",
+                    {"default": 0.75, "min": 0.0, "max": 1.0, "step": 0.05},
+                ),
+                "max_position_shift": (
+                    "FLOAT",
+                    {"default": 4.0, "min": 0.0, "max": 32.0, "step": 0.25},
+                ),
+                "max_color_shift": (
+                    "FLOAT",
+                    {"default": 0.08, "min": 0.0, "max": 0.25, "step": 0.01},
+                ),
+            }
+        }
+
+    @staticmethod
+    def stabilize(
+        images,
+        context_frames=0,
+        correction_frames=12,
+        position_strength=0.5,
+        color_strength=0.75,
+        max_position_shift=4.0,
+        max_color_shift=0.08,
+    ):
+        frame_count = int(context_frames)
+        return (
+            _stabilize_h3_seam(
+                images=images,
+                context_frames=frame_count,
+                correction_frames=int(correction_frames),
+                position_strength=float(position_strength),
+                color_strength=float(color_strength),
+                max_position_shift=float(max_position_shift),
+                max_color_shift=float(max_color_shift),
+            ),
+        )
+
+
 class MiniMaxH3EasySaveVideo:
     CATEGORY = "MiniMax H3 Easy"
     FUNCTION = "save"
@@ -1813,4 +2107,5 @@ NODE_CLASS_MAPPINGS = {
     "MiniMaxH3EasySaveVideo": MiniMaxH3EasySaveVideo,
     "MiniMaxH3EasyFrameInterpolation": MiniMaxH3EasyFrameInterpolation,
     "MiniMaxH3EasyChromaContext": MiniMaxH3EasyChromaContext,
+    "MiniMaxH3EasySeamStabilizer": MiniMaxH3EasySeamStabilizer,
 }

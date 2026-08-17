@@ -8,6 +8,7 @@ from .nodes import (
     MiniMaxH3EasyOutput,
     MiniMaxH3EasyReplaceVideoFrames,
     MiniMaxH3EasySaveVideo,
+    MiniMaxH3EasySeamStabilizer,
 )
 from .face_refine_nodes import (
     NODE_CLASS_MAPPINGS as FACE_REFINE_NODE_CLASS_MAPPINGS,
@@ -25,6 +26,7 @@ NODE_CLASS_MAPPINGS = {
     "MiniMaxH3EasySaveVideo": MiniMaxH3EasySaveVideo,
     "MiniMaxH3EasyFrameInterpolation": MiniMaxH3EasyFrameInterpolation,
     "MiniMaxH3EasyChromaContext": MiniMaxH3EasyChromaContext,
+    "MiniMaxH3EasySeamStabilizer": MiniMaxH3EasySeamStabilizer,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -38,6 +40,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3EasySaveVideo": "MiniMax H3 Easy Save Video",
     "MiniMaxH3EasyFrameInterpolation": "MiniMax H3 Easy Frame Interpolation",
     "MiniMaxH3EasyChromaContext": "MiniMax H3 Easy Chroma Context",
+    "MiniMaxH3EasySeamStabilizer": "MiniMax H3 Easy Seam Stabilizer",
 }
 
 WEB_DIRECTORY = "./web"
