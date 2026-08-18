@@ -111,6 +111,15 @@ MAX_SECONDS = 20.0
 REFERENCE_PLACEHOLDER_RE = re.compile(r"__MINIMAX_H3_REF_(\d+)__")
 UNRESOLVED_REFERENCE_RE = re.compile(r"__MINIMAX_H3_UNRESOLVED_REF_[^_]+__")
 MODEL_FILE_EXTENSIONS = {".safetensors", ".gguf"}
+H3_MULTI_SET_MAX_PAIRS = 64
+
+
+class _H3AnyType(str):
+    def __ne__(self, _value: object) -> bool:
+        return False
+
+
+H3_ANY_TYPE = _H3AnyType("*")
 
 
 def _normalise_model_name(name: str) -> str:
@@ -2110,6 +2119,61 @@ def _resize_h3_media_image(image: torch.Tensor, scale: float, method: str) -> to
     ).movedim(1, -1)
 
 
+def _select_h3_multi_set_outputs(
+    input_values: Mapping[str, Any],
+    pair_count: int,
+) -> tuple[Any, ...]:
+    """Route repeated Comfy lists to one item per connected Multi Set input."""
+    source_positions: dict[int, int] = {}
+    outputs = []
+    for slot in range(pair_count):
+        values = input_values.get(f"value_{slot + 1}", [])
+        if not isinstance(values, (list, tuple)):
+            values = [values]
+        if not values:
+            outputs.append(None)
+            continue
+        if len(values) == 1:
+            outputs.append(values[0])
+            continue
+
+        source_id = id(values)
+        source_index = source_positions.get(source_id, 0)
+        if source_index >= len(values):
+            raise ValueError(
+                "Multi Set has more connections to one list output than that list has items"
+            )
+        outputs.append(values[source_index])
+        source_positions[source_id] = source_index + 1
+    return tuple(outputs)
+
+
+class MiniMaxH3EasyMultiSet:
+    CATEGORY = "MiniMax H3 Easy/Utilities"
+    FUNCTION = "route_values"
+    RETURN_TYPES = (H3_ANY_TYPE,) * H3_MULTI_SET_MAX_PAIRS
+    RETURN_NAMES = tuple(f"value_{index + 1}" for index in range(H3_MULTI_SET_MAX_PAIRS))
+    INPUT_IS_LIST = True
+    OUTPUT_IS_LIST = (False,) * H3_MULTI_SET_MAX_PAIRS
+    DESCRIPTION = (
+        "Collect dynamically typed values for KJ Get nodes. Repeated connections from "
+        "the same Comfy list output are distributed in order, one item per port."
+    )
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "optional": {
+                f"value_{index + 1}": (H3_ANY_TYPE, {"forceInput": True})
+                for index in range(H3_MULTI_SET_MAX_PAIRS)
+            }
+        }
+
+    @staticmethod
+    def route_values(**kwargs):
+        return _select_h3_multi_set_outputs(kwargs, H3_MULTI_SET_MAX_PAIRS)
+
+
 class MiniMaxH3EasyMediaLoader:
     CATEGORY = "MiniMax H3 Easy"
     FUNCTION = "load_media"
@@ -2360,4 +2424,5 @@ NODE_CLASS_MAPPINGS = {
     "MiniMaxH3EasyChromaContext": MiniMaxH3EasyChromaContext,
     "MiniMaxH3EasySeamStabilizer": MiniMaxH3EasySeamStabilizer,
     "MiniMaxH3EasyMediaLoader": MiniMaxH3EasyMediaLoader,
+    "MiniMaxH3EasyMultiSet": MiniMaxH3EasyMultiSet,
 }

@@ -4,6 +4,7 @@ const NODE_TYPE = "MiniMaxH3EasyMultiSet";
 const GET_NODE_TYPE = "GetNode";
 const SET_NODE_TYPE = "SetNode";
 const MIN_PAIRS = 2;
+const MAX_PAIRS = 64;
 const ZH_BROWSER = /^(zh)(?:[-_]|$)/i.test(
     String(globalThis.navigator?.language || globalThis.navigator?.languages?.[0] || ""),
 );
@@ -247,7 +248,22 @@ function installGetNodeCompatibility() {
             return originalGetInputLink?.apply(this, arguments) ?? null;
         }
         const entry = findMultiSetEntry(this.graph, this.widgets?.[0]?.value);
-        return graphLink(this.graph, entry?.input?.link);
+        if (!entry) return null;
+        return {
+            origin_id: entry.node.id,
+            origin_slot: entry.slot,
+            target_id: this.id,
+            target_slot: slot,
+            type: entry.output?.type || entry.input?.type || "*",
+        };
+    };
+
+    const originalResolveVirtualOutput = prototype.resolveVirtualOutput;
+    prototype.resolveVirtualOutput = function resolveMultiSetOutput(slot) {
+        const conventional = originalResolveVirtualOutput?.apply(this, arguments);
+        if (conventional) return conventional;
+        const entry = findMultiSetEntry(this.graph, this.widgets?.[0]?.value);
+        return entry ? { node: entry.node, slot: entry.slot } : undefined;
     };
 
     const originalGoToSetter = prototype.goToSetter;
@@ -271,163 +287,240 @@ function scheduleGetCompatibility() {
     }
 }
 
-app.registerExtension({
-    name: "MiniMaxH3Easy.MultiSet",
-    registerCustomNodes() {
-        const LiteGraph = globalThis.LiteGraph;
-        if (!LiteGraph?.LGraphNode || LiteGraph.registered_node_types?.[NODE_TYPE]) return;
+function scheduleCreatedGetRefresh(node) {
+    const refresh = () => {
+        if (!node?.graph) return;
+        installGetNodeCompatibility();
+        refreshGetNode(node);
+    };
+    const originalAdded = node.onAdded;
+    if (!originalAdded?.__h3MultiSetRefreshWrapped) {
+        const wrappedAdded = function onAddedWithMultiSetRefresh() {
+            const result = originalAdded?.apply(this, arguments);
+            queueMicrotask(refresh);
+            return result;
+        };
+        wrappedAdded.__h3MultiSetRefreshWrapped = true;
+        node.onAdded = wrappedAdded;
+    }
+    queueMicrotask(refresh);
+    for (const delay of [0, 50, 200]) setTimeout(refresh, delay);
+}
 
-        class MultiSetNode extends LiteGraph.LGraphNode {
-            constructor(title) {
-                super(title);
-                this.title = TEXT.title;
-                this.serialize_widgets = true;
-                this.isVirtualNode = true;
-                this.properties ||= {};
-                this.properties.multi_set_previous_names ||= [];
-                this.ensurePairs(MIN_PAIRS);
-            }
+function inputName(slot) {
+    return `value_${slot + 1}`;
+}
 
-            addPair() {
-                const slot = this.inputs?.length || 0;
-                this.addInput(`${TEXT.empty} ${slot + 1}`, "*");
-                this.addOutput(`${TEXT.empty} ${slot + 1}`, "*");
-                this.addNameWidget(slot);
-            }
+function addNameWidget(node, slot) {
+    if (entryWidget(node, slot)) return;
+    node.addWidget("text", `name_${slot + 1}`, "", () => {
+        if (!node.graph || app.configuringGraph) return;
+        node.commitName(slot);
+        refreshGetNodes(node.graph);
+    }, {});
+}
 
-            addNameWidget(slot) {
-                if (entryWidget(this, slot)) return;
-                this.addWidget("text", `name_${slot + 1}`, "", () => {
-                    if (!this.graph || app.configuringGraph) return;
-                    this.commitName(slot);
-                    refreshGetNodes(this.graph);
-                }, {});
-            }
+function ensurePairs(node, requestedCount) {
+    const count = Math.min(MAX_PAIRS, Math.max(MIN_PAIRS, requestedCount));
+    while ((node.inputs?.length || 0) < count) {
+        const slot = node.inputs?.length || 0;
+        node.addInput(inputName(slot), "*");
+    }
+    while ((node.outputs?.length || 0) < count) {
+        const slot = node.outputs?.length || 0;
+        node.addOutput(`${TEXT.empty} ${slot + 1}`, "*");
+    }
+    for (let slot = 0; slot < count; slot += 1) addNameWidget(node, slot);
+}
 
-            ensurePairs(count) {
-                while ((this.inputs?.length || 0) < count) {
-                    const slot = this.inputs?.length || 0;
-                    this.addInput(`${TEXT.empty} ${slot + 1}`, "*");
-                }
-                while ((this.outputs?.length || 0) < count) {
-                    const slot = this.outputs?.length || 0;
-                    this.addOutput(`${TEXT.empty} ${slot + 1}`, "*");
-                }
-                for (let slot = 0; slot < count; slot += 1) this.addNameWidget(slot);
-            }
+function initializeMultiSet(node) {
+    node.title = TEXT.title;
+    node.serialize_widgets = true;
+    node.properties ||= {};
+    node.properties.multi_set_previous_names ||= [];
 
-            removeLastPair() {
-                const slot = this.inputs.length - 1;
-                const widget = entryWidget(this, slot);
-                widget?.onRemove?.();
-                if (widget) this.widgets.splice(this.widgets.indexOf(widget), 1);
-                this.removeInput(slot);
-                this.removeOutput(slot);
-                this.properties.multi_set_previous_names.length = slot;
-            }
+    while ((node.inputs?.length || 0) > MIN_PAIRS) node.removeInput(node.inputs.length - 1);
+    while ((node.outputs?.length || 0) > MIN_PAIRS) node.removeOutput(node.outputs.length - 1);
+    ensurePairs(node, MIN_PAIRS);
+    const computed = node.computeSize?.();
+    if (computed) node.setSize?.([Math.max(210, computed[0]), computed[1]]);
+}
 
-            normalizePairs() {
-                const count = Math.max(MIN_PAIRS, this.inputs?.length || 0, this.outputs?.length || 0);
-                this.ensurePairs(count);
-                while (
-                    this.inputs.length > MIN_PAIRS
-                    && !pairUsed(this, this.inputs.length - 1)
-                    && !pairUsed(this, this.inputs.length - 2)
-                ) {
-                    this.removeLastPair();
-                }
-                if (this.inputs.every((input) => input.link != null)) this.addPair();
-            }
+function installMultiSetNode(nodeType) {
+    const prototype = nodeType?.prototype;
+    if (!prototype || prototype.__h3MultiSetInstalled) return;
+    prototype.__h3MultiSetInstalled = true;
 
-            commitName(slot, suggestedName = "") {
-                const widget = entryWidget(this, slot);
-                if (!widget) return "";
-                const previous = String(this.properties.multi_set_previous_names?.[slot] || "");
-                if (!String(widget.value || "").trim() && suggestedName) widget.value = suggestedName;
-                if (String(widget.value || "").trim()) {
-                    widget.value = uniqueName(this.graph, widget.value, this, slot);
-                }
-                const name = String(widget.value || "").trim();
-                this.properties.multi_set_previous_names[slot] = name;
-                const input = this.inputs?.[slot];
-                const output = this.outputs?.[slot];
-                if (input) input.name = name || `${TEXT.empty} ${slot + 1}`;
-                if (output) output.name = name || `${TEXT.empty} ${slot + 1}`;
+    const originalCreated = prototype.onNodeCreated;
+    prototype.onNodeCreated = function onNodeCreatedMultiSet() {
+        const result = originalCreated?.apply(this, arguments);
+        initializeMultiSet(this);
+        return result;
+    };
 
-                if (previous && previous !== name) {
-                    for (const getNode of graphNodes(this.graph)) {
-                        if (getNode.type !== GET_NODE_TYPE || getNode.widgets?.[0]?.value !== previous) continue;
-                        getNode.widgets[0].value = name;
-                        getNode.onRename?.();
-                    }
-                }
-                return name;
-            }
+    prototype.addPair = function addPair() {
+        const slot = this.inputs?.length || 0;
+        if (slot >= MAX_PAIRS) return;
+        this.addInput(inputName(slot), "*");
+        this.addOutput(`${TEXT.empty} ${slot + 1}`, "*");
+        addNameWidget(this, slot);
+    };
 
-            syncPair(slot) {
-                const input = this.inputs?.[slot];
-                const output = this.outputs?.[slot];
-                if (!input || !output) return;
-                const source = sourceInfo(this, slot);
-                const type = source?.type || targetType(this, slot) || "*";
-                input.type = type;
-                output.type = type;
-                this.commitName(slot, source?.name || (type !== "*" ? type : ""));
-            }
+    prototype.ensurePairs = function ensureMultiSetPairs(count) {
+        ensurePairs(this, count);
+    };
 
-            syncAllPairs() {
-                this.normalizePairs();
-                for (let slot = 0; slot < this.inputs.length; slot += 1) this.syncPair(slot);
-                const computed = this.computeSize?.();
-                if (computed) this.setSize?.([
-                    Math.max(this.size?.[0] || 0, computed[0]),
-                    Math.max(this.size?.[1] || 0, computed[1]),
-                ]);
-                refreshGetNodes(this.graph);
-                this.setDirtyCanvas?.(true, true);
-            }
+    prototype.addNameWidget = function addMultiSetNameWidget(slot) {
+        addNameWidget(this, slot);
+    };
 
-            onConnectionsChange(type) {
-                const LiteGraph = globalThis.LiteGraph;
-                if (
-                    app.configuringGraph
-                    || (type !== (LiteGraph?.INPUT ?? 1) && type !== (LiteGraph?.OUTPUT ?? 2))
-                ) return;
-                queueMicrotask(() => {
-                    if (this.graph) this.syncAllPairs();
-                });
-            }
+    prototype.removeLastPair = function removeLastPair() {
+        const slot = this.inputs.length - 1;
+        const widget = entryWidget(this, slot);
+        widget?.onRemove?.();
+        if (widget) this.widgets.splice(this.widgets.indexOf(widget), 1);
+        this.removeInput(slot);
+        this.removeOutput(slot);
+        this.properties.multi_set_previous_names.length = slot;
+    };
 
-            getInputLink(slot) {
-                return graphLink(this.graph, this.inputs?.[slot]?.link);
-            }
+    prototype.normalizePairs = function normalizePairs() {
+        const count = Math.max(MIN_PAIRS, this.inputs?.length || 0, this.outputs?.length || 0);
+        ensurePairs(this, count);
+        while (
+            this.inputs.length > MIN_PAIRS
+            && !pairUsed(this, this.inputs.length - 1)
+            && !pairUsed(this, this.inputs.length - 2)
+        ) {
+            this.removeLastPair();
+        }
+        if (
+            this.inputs.length < MAX_PAIRS
+            && this.inputs.every((input) => input.link != null)
+        ) this.addPair();
+    };
 
-            onAfterGraphConfigured() {
-                const savedValues = Array.isArray(this.widgets_values) ? [...this.widgets_values] : [];
-                const count = Math.max(MIN_PAIRS, this.inputs?.length || 0, this.outputs?.length || 0);
-                this.ensurePairs(count);
-                for (let slot = 0; slot < savedValues.length; slot += 1) {
-                    const widget = entryWidget(this, slot);
-                    if (widget) widget.value = savedValues[slot];
-                }
-                this.syncAllPairs();
-            }
+    prototype.commitName = function commitName(slot, suggestedName = "") {
+        const widget = entryWidget(this, slot);
+        if (!widget) return "";
+        const previous = String(this.properties.multi_set_previous_names?.[slot] || "");
+        if (!String(widget.value || "").trim() && suggestedName) widget.value = suggestedName;
+        if (String(widget.value || "").trim()) {
+            widget.value = uniqueName(this.graph, widget.value, this, slot);
+        }
+        const name = String(widget.value || "").trim();
+        const visibleName = name || `${TEXT.empty} ${slot + 1}`;
+        this.properties.multi_set_previous_names[slot] = name;
+        const input = this.inputs?.[slot];
+        const output = this.outputs?.[slot];
+        if (input) {
+            input.name = inputName(slot);
+            input.label = visibleName;
+        }
+        if (output) output.name = visibleName;
 
-            onRemoved() {
-                if (this.graph) refreshGetNodes(this.graph);
+        if (previous && previous !== name) {
+            for (const getNode of graphNodes(this.graph)) {
+                if (getNode.type !== GET_NODE_TYPE || getNode.widgets?.[0]?.value !== previous) continue;
+                getNode.widgets[0].value = name;
+                getNode.onRename?.();
             }
         }
+        return name;
+    };
 
-        LiteGraph.registerNodeType(
-            NODE_TYPE,
-            Object.assign(MultiSetNode, { title: TEXT.title }),
+    prototype.syncPair = function syncPair(slot) {
+        const input = this.inputs?.[slot];
+        const output = this.outputs?.[slot];
+        if (!input || !output) return;
+        const source = sourceInfo(this, slot);
+        const type = source?.type || targetType(this, slot) || "*";
+        input.type = type;
+        output.type = type;
+        this.commitName(slot, source?.name || (type !== "*" ? type : ""));
+    };
+
+    prototype.syncAllPairs = function syncAllPairs() {
+        this.normalizePairs();
+        for (let slot = 0; slot < this.inputs.length; slot += 1) this.syncPair(slot);
+        const computed = this.computeSize?.();
+        if (computed) this.setSize?.([
+            Math.max(this.size?.[0] || 0, computed[0]),
+            Math.max(this.size?.[1] || 0, computed[1]),
+        ]);
+        refreshGetNodes(this.graph);
+        this.setDirtyCanvas?.(true, true);
+    };
+
+    const originalConnectionsChange = prototype.onConnectionsChange;
+    prototype.onConnectionsChange = function onConnectionsChangeMultiSet(type) {
+        const result = originalConnectionsChange?.apply(this, arguments);
+        const LiteGraph = globalThis.LiteGraph;
+        if (
+            app.configuringGraph
+            || (type !== (LiteGraph?.INPUT ?? 1) && type !== (LiteGraph?.OUTPUT ?? 2))
+        ) return result;
+        queueMicrotask(() => {
+            if (this.graph) this.syncAllPairs();
+        });
+        return result;
+    };
+
+    const originalAfterConfigured = prototype.onAfterGraphConfigured;
+    prototype.onAfterGraphConfigured = function onAfterGraphConfiguredMultiSet() {
+        const result = originalAfterConfigured?.apply(this, arguments);
+        const savedValues = this.__h3MultiSetSavedWidgetValues || [];
+        const count = Math.max(MIN_PAIRS, this.inputs?.length || 0, this.outputs?.length || 0);
+        ensurePairs(this, count);
+        for (let slot = 0; slot < savedValues.length; slot += 1) {
+            const widget = entryWidget(this, slot);
+            if (widget) widget.value = savedValues[slot];
+        }
+        this.syncAllPairs();
+        this.__h3MultiSetSavedWidgetValues = null;
+        return result;
+    };
+
+    const originalConfigure = prototype.onConfigure;
+    prototype.onConfigure = function onConfigureMultiSet(info) {
+        const result = originalConfigure?.apply(this, arguments);
+        this.__h3MultiSetSavedWidgetValues = Array.isArray(info?.widgets_values)
+            ? [...info.widgets_values]
+            : [];
+        const count = Math.max(
+            MIN_PAIRS,
+            info?.inputs?.length || 0,
+            info?.outputs?.length || 0,
+            this.inputs?.length || 0,
+            this.outputs?.length || 0,
         );
-        MultiSetNode.category = TEXT.category;
+        ensurePairs(this, count);
+        for (let slot = 0; slot < this.__h3MultiSetSavedWidgetValues.length; slot += 1) {
+            const widget = entryWidget(this, slot);
+            if (widget) widget.value = this.__h3MultiSetSavedWidgetValues[slot];
+        }
+        return result;
+    };
+
+    const originalRemoved = prototype.onRemoved;
+    prototype.onRemoved = function onRemovedMultiSet() {
+        const graph = this.graph;
+        const result = originalRemoved?.apply(this, arguments);
+        if (graph) setTimeout(() => refreshGetNodes(graph), 0);
+        return result;
+    };
+}
+
+app.registerExtension({
+    name: "MiniMaxH3Easy.MultiSet",
+    async beforeRegisterNodeDef(nodeType, nodeData) {
+        if (nodeData?.name !== NODE_TYPE) return;
+        installMultiSetNode(nodeType);
     },
     nodeCreated(node) {
         if (node?.type !== GET_NODE_TYPE) return;
         installGetNodeCompatibility();
-        refreshGetNode(node);
+        scheduleCreatedGetRefresh(node);
     },
     setup() {
         scheduleGetCompatibility();
