@@ -2926,26 +2926,38 @@ function showConditionalWidget(widget) {
 }
 
 function setConditionalWidgetVisible(node, widget, visible) {
-    const rowHeight = getConditionalWidgetHeight(node, widget);
     const changed = visible ? showConditionalWidget(widget) : hideConditionalWidget(widget);
     if (!changed) return false;
-    adjustNodeHeight(node, visible ? rowHeight : -rowHeight);
     refreshVueNodeWidgets(node);
     node._widgetSlotsDirty = true;
     return true;
 }
 
-function syncModeWidgets(node) {
+function syncModeWidgets(node, preserveNodeSize = false) {
     const advanced = isAdvancedEnabled(node);
-    const changed = [
-        setConditionalWidgetVisible(node, getWidget(node, "fps"), advanced),
-        setConditionalWidgetVisible(node, getWidget(node, "keyframe_role"), advanced && !isReferenceMode(node)),
-        setConditionalWidgetVisible(node, getWidget(node, "ref_image_size"), advanced),
-        setConditionalWidgetVisible(node, getWidget(node, "reference_mention_mode"), advanced && isReferenceMode(node)),
-        setConditionalWidgetVisible(node, getWidget(node, "aspect_ratio"), !isCustomResolution(node)),
-        setConditionalWidgetVisible(node, getWidget(node, "width"), isCustomResolution(node)),
-        setConditionalWidgetVisible(node, getWidget(node, "height"), isCustomResolution(node)),
-    ].some(Boolean);
+    const widgets = [
+        [getWidget(node, "fps"), advanced],
+        [getWidget(node, "keyframe_role"), advanced && !isReferenceMode(node)],
+        [getWidget(node, "ref_image_size"), advanced],
+        [getWidget(node, "reference_mention_mode"), advanced && isReferenceMode(node)],
+        [getWidget(node, "aspect_ratio"), !isCustomResolution(node)],
+        [getWidget(node, "width"), isCustomResolution(node)],
+        [getWidget(node, "height"), isCustomResolution(node)],
+    ];
+    const desiredHeightAdjustment = -widgets.reduce((total, [widget, visible]) => (
+        widget && !visible ? total + getConditionalWidgetHeight(node, widget) : total
+    ), 0);
+    const previousHeightAdjustment = Number(node.__h3ConditionalHeightAdjustment) || 0;
+    const changed = widgets.map(([widget, visible]) => (
+        setConditionalWidgetVisible(node, widget, visible)
+    )).some(Boolean);
+
+    // onConfigure already restores the serialized node size. Treat that size as
+    // authoritative so graph undo/redo cannot apply the widget compensation twice.
+    node.__h3ConditionalHeightAdjustment = desiredHeightAdjustment;
+    if (!preserveNodeSize) {
+        adjustNodeHeight(node, desiredHeightAdjustment - previousHeightAdjustment);
+    }
     if (changed) {
         refreshVueNodeWidgets(node);
         node._widgetSlotsDirty = true;
@@ -3908,7 +3920,7 @@ function installNode(nodeType, nodeData) {
         repairConfiguredWidgetValues(this, info);
         normalizeLinks(this);
         localizeNodeInstance(this);
-        syncModeWidgets(this);
+        syncModeWidgets(this, true);
         renderEditorFromNode(this);
         resetPromptHistory(this);
         syncEditorMode(this);
