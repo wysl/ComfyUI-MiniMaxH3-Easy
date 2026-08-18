@@ -45,6 +45,19 @@ class MultiSetNodeTests(unittest.TestCase):
         self.assertIn("node.widgets.splice(index, 1);", self.source)
         self.assertIn("node.widgets.splice(index, 0, widget);", self.source)
 
+    def test_kjnodes_instance_refresh_keeps_multi_set_values(self):
+        self.assertIn("function installGetNodeInstanceCompatibility(node)", self.source)
+        self.assertIn('const refreshCombo = node._refreshComboOptions;', self.source)
+        self.assertIn("wrapGetCombo(this);", self.source)
+        self.assertIn("wrappedRefresh.__h3MultiSetWrapped = true;", self.source)
+        self.assertIn("refreshGetNode(node);", self.source)
+
+    def test_kjnodes_legacy_menu_uses_merged_widget_values(self):
+        self.assertIn("function installGetWidgetClickCompatibility(node, widget)", self.source)
+        self.assertIn("const values = getComboValues(widget);", self.source)
+        self.assertIn("new LiteGraph.ContextMenu(labels", self.source)
+        self.assertIn("installGetWidgetClickCompatibility(node, widget);", self.source)
+
     def test_has_no_control_after_generate_option(self):
         self.assertNotIn("addValueControlWidgets", self.source)
         self.assertNotIn("control_after_generate", self.source)

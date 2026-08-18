@@ -107,6 +107,49 @@ function multiSetNames(graph) {
     return multiSetEntries(graph).map((entry) => entry.name);
 }
 
+function getComboValues(widget) {
+    let values = widget?.options?.values;
+    if (typeof values === "function") values = values.call(widget.options);
+    return Array.isArray(values) ? values : [];
+}
+
+function installGetWidgetClickCompatibility(node, widget) {
+    const originalOnClick = widget?.onClick;
+    if (typeof originalOnClick !== "function" || originalOnClick.__h3MultiSetWrapped) return;
+    const wrappedOnClick = function openGetComboWithMultiSet(params) {
+        const LiteGraph = globalThis.LiteGraph;
+        if (LiteGraph?.vueNodesMode || !multiSetNames(node.graph).length) {
+            return originalOnClick.apply(this, arguments);
+        }
+        const { e, canvas } = params || {};
+        const x = Number(e?.canvasX) - Number(node.pos?.[0]);
+        const width = Number(widget.width || node.size?.[0]) || 0;
+        if (!e || !canvas || !Number.isFinite(x) || x < 40 || x > width - 40) {
+            return originalOnClick.apply(this, arguments);
+        }
+        const values = getComboValues(widget);
+        const getOptionLabel = widget.options?.getOptionLabel;
+        const labels = values.map((value) => getOptionLabel?.(value) || value);
+        new LiteGraph.ContextMenu(labels, {
+            scale: Math.max(1, Number(canvas.ds?.scale) || 1),
+            event: e,
+            className: "dark",
+            callback: (selectedLabel) => {
+                const index = labels.indexOf(selectedLabel);
+                if (index < 0) return;
+                if (typeof widget.setValue === "function") {
+                    widget.setValue(values[index], { e, node, canvas });
+                } else {
+                    widget.value = values[index];
+                    widget.callback?.(values[index]);
+                }
+            },
+        });
+    };
+    wrappedOnClick.__h3MultiSetWrapped = true;
+    widget.onClick = wrappedOnClick;
+}
+
 function wrapGetCombo(node) {
     if (node?.type !== GET_NODE_TYPE) return;
     const widget = node.widgets?.[0];
@@ -129,6 +172,7 @@ function wrapGetCombo(node) {
         get: () => [...new Set([...readOriginal(), ...multiSetNames(node.graph)])].sort(),
     });
     widget.options = wrapped;
+    installGetWidgetClickCompatibility(node, widget);
 
     // Vue nodes cache combo options by object identity. Reinsert the widget so
     // newly connected or renamed Multi Set entries become visible immediately.
@@ -139,11 +183,31 @@ function wrapGetCombo(node) {
     }
 }
 
+function installGetNodeInstanceCompatibility(node) {
+    if (node?.type !== GET_NODE_TYPE) return;
+    const refreshCombo = node._refreshComboOptions;
+    if (typeof refreshCombo === "function" && !refreshCombo.__h3MultiSetWrapped) {
+        const wrappedRefresh = function refreshComboWithMultiSet() {
+            const result = refreshCombo.apply(this, arguments);
+            wrapGetCombo(this);
+            return result;
+        };
+        wrappedRefresh.__h3MultiSetWrapped = true;
+        node._refreshComboOptions = wrappedRefresh;
+    }
+}
+
+function refreshGetNode(node) {
+    if (node?.type !== GET_NODE_TYPE) return;
+    installGetNodeInstanceCompatibility(node);
+    if (typeof node._refreshComboOptions === "function") node._refreshComboOptions();
+    else wrapGetCombo(node);
+    node.onRename?.();
+}
+
 function refreshGetNodes(graph) {
     for (const node of graphNodes(graph)) {
-        if (node.type !== GET_NODE_TYPE) continue;
-        wrapGetCombo(node);
-        node.onRename?.();
+        refreshGetNode(node);
     }
     app.canvas?.setDirty?.(true, true);
 }
@@ -195,14 +259,6 @@ function installGetNodeCompatibility() {
         app.canvas?.setDirty?.(true, true);
     };
 
-    const originalRefreshCombo = prototype._refreshComboOptions;
-    if (originalRefreshCombo) {
-        prototype._refreshComboOptions = function refreshComboWithMultiSet() {
-            const result = originalRefreshCombo.apply(this, arguments);
-            wrapGetCombo(this);
-            return result;
-        };
-    }
     return true;
 }
 
@@ -210,7 +266,7 @@ function scheduleGetCompatibility() {
     for (const delay of [0, 100, 500, 1500]) {
         setTimeout(() => {
             if (!installGetNodeCompatibility()) return;
-            for (const node of graphNodes(app.graph)) wrapGetCombo(node);
+            for (const node of graphNodes(app.graph)) refreshGetNode(node);
         }, delay);
     }
 }
@@ -371,7 +427,7 @@ app.registerExtension({
     nodeCreated(node) {
         if (node?.type !== GET_NODE_TYPE) return;
         installGetNodeCompatibility();
-        wrapGetCombo(node);
+        refreshGetNode(node);
     },
     setup() {
         scheduleGetCompatibility();
