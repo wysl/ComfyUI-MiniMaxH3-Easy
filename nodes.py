@@ -7,6 +7,7 @@ chain. The browser extension supplies the ordered virtual media inputs.
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import random
@@ -26,6 +27,7 @@ import torchaudio
 import comfy.nested_tensor
 import comfy.model_management
 import comfy.samplers
+import comfy.utils
 import folder_paths
 import node_helpers
 import nodes
@@ -2050,6 +2052,145 @@ class MiniMaxH3EasySeamStabilizer:
         )
 
 
+def _parse_h3_media_manifest(value: Any) -> dict[str, list[str]]:
+    empty = {"images": [], "audios": [], "videos": []}
+    if isinstance(value, list):
+        value = value[0] if value else ""
+    try:
+        payload = value if isinstance(value, Mapping) else json.loads(str(value or "{}"))
+    except (TypeError, ValueError):
+        return empty
+    if not isinstance(payload, Mapping):
+        return empty
+
+    result = {}
+    for key in empty:
+        items = payload.get(key, [])
+        if not isinstance(items, list):
+            items = []
+        result[key] = [str(item).strip() for item in items if str(item).strip()]
+    return result
+
+
+H3_MEDIA_EXTENSIONS = {
+    "images": {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"},
+    "audios": {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"},
+    "videos": {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"},
+}
+
+
+def _validate_h3_media_manifest(manifest: Mapping[str, list[str]]) -> str | None:
+    for media_type, extensions in H3_MEDIA_EXTENSIONS.items():
+        for name in manifest.get(media_type, []):
+            if os.path.splitext(str(name))[1].lower() not in extensions:
+                return f"Invalid {media_type[:-1]} file type: {name}"
+            if not folder_paths.exists_annotated_filepath(name):
+                return f"Missing {media_type[:-1]} file: {name}"
+    return None
+
+
+def _h3_media_target_size(width: int, height: int, scale: float) -> tuple[int, int]:
+    factor = max(0.01, float(scale))
+    return max(1, round(int(width) * factor)), max(1, round(int(height) * factor))
+
+
+def _resize_h3_media_image(image: torch.Tensor, scale: float, method: str) -> torch.Tensor:
+    if not isinstance(image, torch.Tensor) or image.ndim != 4:
+        raise TypeError("Loaded images must use ComfyUI's [batch, height, width, channels] layout")
+    source_height, source_width = int(image.shape[1]), int(image.shape[2])
+    target_width, target_height = _h3_media_target_size(source_width, source_height, scale)
+    if target_width == source_width and target_height == source_height:
+        return image
+    return comfy.utils.common_upscale(
+        image.movedim(-1, 1),
+        target_width,
+        target_height,
+        str(method),
+        "disabled",
+    ).movedim(1, -1)
+
+
+class MiniMaxH3EasyMediaLoader:
+    CATEGORY = "MiniMax H3 Easy"
+    FUNCTION = "load_media"
+    RETURN_TYPES = ("IMAGE", "AUDIO", "VIDEO")
+    RETURN_NAMES = ("multi output", "audio output", "video output")
+    OUTPUT_IS_LIST = (True, True, True)
+    DESCRIPTION = (
+        "Load ordered image, audio, and video lists without mixing media types. "
+        "Image scaling preserves each source image's aspect ratio."
+    )
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "media_manifest": (
+                    "STRING",
+                    {"default": '{"version":1,"images":[],"audios":[],"videos":[]}'},
+                ),
+                "image_scale": (
+                    "FLOAT",
+                    {"default": 1.0, "min": 0.1, "max": 8.0, "step": 0.05},
+                ),
+                "scale_method": (
+                    ["lanczos", "bicubic", "bilinear", "area", "nearest-exact"],
+                    {"default": "lanczos"},
+                ),
+            }
+        }
+
+    @staticmethod
+    def load_media(media_manifest, image_scale=1.0, scale_method="lanczos"):
+        manifest = _parse_h3_media_manifest(media_manifest)
+        validation_error = _validate_h3_media_manifest(manifest)
+        if validation_error:
+            raise ValueError(validation_error)
+
+        image_outputs = []
+        image_loader = nodes.LoadImage()
+        for name in manifest["images"]:
+            image, _mask = image_loader.load_image(name)
+            image_outputs.append(
+                _resize_h3_media_image(image, float(image_scale), str(scale_method))
+            )
+
+        from comfy_extras.nodes_audio import load as load_audio_file
+
+        audio_outputs = []
+        for name in manifest["audios"]:
+            path = folder_paths.get_annotated_filepath(name)
+            waveform, sample_rate = load_audio_file(path)
+            audio_outputs.append(
+                {"waveform": waveform.unsqueeze(0), "sample_rate": sample_rate}
+            )
+
+        video_outputs = [
+            InputImpl.VideoFromFile(folder_paths.get_annotated_filepath(name))
+            for name in manifest["videos"]
+        ]
+        return image_outputs, audio_outputs, video_outputs
+
+    @classmethod
+    def IS_CHANGED(cls, media_manifest, image_scale=1.0, scale_method="lanczos"):
+        manifest = _parse_h3_media_manifest(media_manifest)
+        signature = [str(float(image_scale)), str(scale_method)]
+        for media_type in ("images", "audios", "videos"):
+            for name in manifest[media_type]:
+                try:
+                    path = folder_paths.get_annotated_filepath(name)
+                    stat = os.stat(path)
+                    signature.extend((media_type, name, str(stat.st_mtime_ns), str(stat.st_size)))
+                except OSError:
+                    signature.extend((media_type, name, "missing"))
+        return "|".join(signature)
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, media_manifest, **_kwargs):
+        manifest = _parse_h3_media_manifest(media_manifest)
+        return _validate_h3_media_manifest(manifest) or True
+
+
 class MiniMaxH3EasySaveVideo:
     CATEGORY = "MiniMax H3 Easy"
     FUNCTION = "save"
@@ -2218,4 +2359,5 @@ NODE_CLASS_MAPPINGS = {
     "MiniMaxH3EasyFrameInterpolation": MiniMaxH3EasyFrameInterpolation,
     "MiniMaxH3EasyChromaContext": MiniMaxH3EasyChromaContext,
     "MiniMaxH3EasySeamStabilizer": MiniMaxH3EasySeamStabilizer,
+    "MiniMaxH3EasyMediaLoader": MiniMaxH3EasyMediaLoader,
 }

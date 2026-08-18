@@ -5,6 +5,7 @@ from .nodes import (
     MiniMaxH3EasyFaceRefine,
     MiniMaxH3EasyFrameInterpolation,
     MiniMaxH3EasyLoader,
+    MiniMaxH3EasyMediaLoader,
     MiniMaxH3EasyOutput,
     MiniMaxH3EasyReplaceVideoFrames,
     MiniMaxH3EasySaveVideo,
@@ -18,6 +19,7 @@ from .face_refine_nodes import (
 NODE_CLASS_MAPPINGS = {
     **FACE_REFINE_NODE_CLASS_MAPPINGS,
     "MiniMaxH3EasyLoader": MiniMaxH3EasyLoader,
+    "MiniMaxH3EasyMediaLoader": MiniMaxH3EasyMediaLoader,
     "MiniMaxH3Easy": MiniMaxH3Easy,
     "MiniMaxH3EasyOutput": MiniMaxH3EasyOutput,
     "MiniMaxH3EasyFaceRefine": MiniMaxH3EasyFaceRefine,
@@ -32,6 +34,7 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     **FACE_REFINE_NODE_DISPLAY_NAME_MAPPINGS,
     "MiniMaxH3EasyLoader": "MiniMax H3 Easy Loader",
+    "MiniMaxH3EasyMediaLoader": "MiniMax H3 Easy 多媒体加载",
     "MiniMaxH3Easy": "MiniMax H3 Easy",
     "MiniMaxH3EasyOutput": "MiniMax H3 Easy Output",
     "MiniMaxH3EasyFaceRefine": "MiniMax H3 Easy Distant Face Refine",
