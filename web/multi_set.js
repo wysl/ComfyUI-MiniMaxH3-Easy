@@ -275,6 +275,13 @@ function installGetNodeCompatibility() {
         app.canvas?.setDirty?.(true, true);
     };
 
+    const originalOnAdded = prototype.onAdded;
+    prototype.onAdded = function onAddedWithMultiSetRefresh() {
+        const result = originalOnAdded?.apply(this, arguments);
+        scheduleCreatedGetRefresh(this);
+        return result;
+    };
+
     return true;
 }
 
@@ -293,16 +300,6 @@ function scheduleCreatedGetRefresh(node) {
         installGetNodeCompatibility();
         refreshGetNode(node);
     };
-    const originalAdded = node.onAdded;
-    if (!originalAdded?.__h3MultiSetRefreshWrapped) {
-        const wrappedAdded = function onAddedWithMultiSetRefresh() {
-            const result = originalAdded?.apply(this, arguments);
-            queueMicrotask(refresh);
-            return result;
-        };
-        wrappedAdded.__h3MultiSetRefreshWrapped = true;
-        node.onAdded = wrappedAdded;
-    }
     queueMicrotask(refresh);
     for (const delay of [0, 50, 200]) setTimeout(refresh, delay);
 }

@@ -68,6 +68,12 @@ class MultiSetNodeTests(unittest.TestCase):
     def test_new_get_nodes_refresh_after_they_are_added_to_a_graph(self):
         self.assertIn("function scheduleCreatedGetRefresh(node)", self.source)
         self.assertIn("if (!node?.graph) return;", self.source)
+        self.assertIn("const originalOnAdded = prototype.onAdded;", self.source)
+        self.assertIn(
+            "prototype.onAdded = function onAddedWithMultiSetRefresh()",
+            self.source,
+        )
+        self.assertIn("scheduleCreatedGetRefresh(this);", self.source)
         self.assertIn("queueMicrotask(refresh);", self.source)
         self.assertIn("scheduleCreatedGetRefresh(node);", self.source)
 
