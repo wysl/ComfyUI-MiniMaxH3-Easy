@@ -2098,16 +2098,49 @@ def _validate_h3_media_manifest(manifest: Mapping[str, list[str]]) -> str | None
     return None
 
 
-def _h3_media_target_size(width: int, height: int, scale: float) -> tuple[int, int]:
+def _h3_media_target_size(
+    width: int,
+    height: int,
+    scale: float,
+    resize_mode: str = "倍率",
+    edge_length: int = 1024,
+) -> tuple[int, int]:
+    source_width = max(1, int(width))
+    source_height = max(1, int(height))
+    target_edge = max(1, int(edge_length))
+    mode = str(resize_mode).strip().lower()
+
+    if mode in {"长边", "long edge", "long_edge"}:
+        if source_width >= source_height:
+            return target_edge, max(1, round(source_height * target_edge / source_width))
+        return max(1, round(source_width * target_edge / source_height)), target_edge
+
+    if mode in {"短边", "short edge", "short_edge"}:
+        if source_width <= source_height:
+            return target_edge, max(1, round(source_height * target_edge / source_width))
+        return max(1, round(source_width * target_edge / source_height)), target_edge
+
     factor = max(0.01, float(scale))
-    return max(1, round(int(width) * factor)), max(1, round(int(height) * factor))
+    return max(1, round(source_width * factor)), max(1, round(source_height * factor))
 
 
-def _resize_h3_media_image(image: torch.Tensor, scale: float, method: str) -> torch.Tensor:
+def _resize_h3_media_image(
+    image: torch.Tensor,
+    scale: float,
+    method: str,
+    resize_mode: str = "倍率",
+    edge_length: int = 1024,
+) -> torch.Tensor:
     if not isinstance(image, torch.Tensor) or image.ndim != 4:
         raise TypeError("Loaded images must use ComfyUI's [batch, height, width, channels] layout")
     source_height, source_width = int(image.shape[1]), int(image.shape[2])
-    target_width, target_height = _h3_media_target_size(source_width, source_height, scale)
+    target_width, target_height = _h3_media_target_size(
+        source_width,
+        source_height,
+        scale,
+        resize_mode,
+        edge_length,
+    )
     if target_width == source_width and target_height == source_height:
         return image
     return comfy.utils.common_upscale(
@@ -2182,7 +2215,8 @@ class MiniMaxH3EasyMediaLoader:
     OUTPUT_IS_LIST = (True, True, True)
     DESCRIPTION = (
         "Load ordered image, audio, and video lists without mixing media types. "
-        "Image scaling preserves each source image's aspect ratio."
+        "Images can resize by scale factor, long edge, or short edge while preserving "
+        "each source image's aspect ratio."
     )
 
     @classmethod
@@ -2201,11 +2235,27 @@ class MiniMaxH3EasyMediaLoader:
                     ["lanczos", "bicubic", "bilinear", "area", "nearest-exact"],
                     {"default": "lanczos"},
                 ),
-            }
+            },
+            "optional": {
+                "image_resize_mode": (
+                    ["倍率", "长边", "短边"],
+                    {"default": "倍率"},
+                ),
+                "image_edge_length": (
+                    "INT",
+                    {"default": 1024, "min": 1, "max": 16384, "step": 8},
+                ),
+            },
         }
 
     @staticmethod
-    def load_media(media_manifest, image_scale=1.0, scale_method="lanczos"):
+    def load_media(
+        media_manifest,
+        image_scale=1.0,
+        scale_method="lanczos",
+        image_resize_mode="倍率",
+        image_edge_length=1024,
+    ):
         manifest = _parse_h3_media_manifest(media_manifest)
         validation_error = _validate_h3_media_manifest(manifest)
         if validation_error:
@@ -2216,7 +2266,13 @@ class MiniMaxH3EasyMediaLoader:
         for name in manifest["images"]:
             image, _mask = image_loader.load_image(name)
             image_outputs.append(
-                _resize_h3_media_image(image, float(image_scale), str(scale_method))
+                _resize_h3_media_image(
+                    image,
+                    float(image_scale),
+                    str(scale_method),
+                    str(image_resize_mode),
+                    int(image_edge_length),
+                )
             )
 
         from comfy_extras.nodes_audio import load as load_audio_file
@@ -2236,9 +2292,21 @@ class MiniMaxH3EasyMediaLoader:
         return image_outputs, audio_outputs, video_outputs
 
     @classmethod
-    def IS_CHANGED(cls, media_manifest, image_scale=1.0, scale_method="lanczos"):
+    def IS_CHANGED(
+        cls,
+        media_manifest,
+        image_scale=1.0,
+        scale_method="lanczos",
+        image_resize_mode="倍率",
+        image_edge_length=1024,
+    ):
         manifest = _parse_h3_media_manifest(media_manifest)
-        signature = [str(float(image_scale)), str(scale_method)]
+        signature = [
+            str(float(image_scale)),
+            str(scale_method),
+            str(image_resize_mode),
+            str(int(image_edge_length)),
+        ]
         for media_type in ("images", "audios", "videos"):
             for name in manifest[media_type]:
                 try:

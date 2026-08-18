@@ -93,6 +93,18 @@ class MediaLoaderNodeTests(unittest.TestCase):
         self.assertEqual(target_size(640, 360, 1.5), (960, 540))
         self.assertEqual(target_size(101, 51, 0.5), (50, 26))
 
+    def test_long_edge_resize_preserves_aspect_ratio(self):
+        target_size = self.symbols["_h3_media_target_size"]
+
+        self.assertEqual(target_size(1920, 1080, 1.0, "长边", 1024), (1024, 576))
+        self.assertEqual(target_size(800, 1200, 1.0, "long_edge", 600), (400, 600))
+
+    def test_short_edge_resize_preserves_aspect_ratio(self):
+        target_size = self.symbols["_h3_media_target_size"]
+
+        self.assertEqual(target_size(1920, 1080, 1.0, "短边", 720), (1280, 720))
+        self.assertEqual(target_size(800, 1200, 1.0, "short edge", 400), (400, 600))
+
     def test_outputs_are_three_independent_comfy_lists(self):
         node = self.symbols["MiniMaxH3EasyMediaLoader"]
 
@@ -104,12 +116,28 @@ class MediaLoaderNodeTests(unittest.TestCase):
         self.assertEqual(node.OUTPUT_IS_LIST, (True, True, True))
 
     def test_image_scaling_controls_are_built_in(self):
-        required = self.symbols["MiniMaxH3EasyMediaLoader"].INPUT_TYPES()["required"]
+        input_types = self.symbols["MiniMaxH3EasyMediaLoader"].INPUT_TYPES()
+        required = input_types["required"]
+        optional = input_types["optional"]
 
         self.assertIn("image_scale", required)
         self.assertIn("scale_method", required)
+        self.assertIn("image_resize_mode", optional)
+        self.assertIn("image_edge_length", optional)
         self.assertEqual(required["image_scale"][1]["default"], 1.0)
         self.assertIn("lanczos", required["scale_method"][0])
+        self.assertEqual(optional["image_resize_mode"][0], ["倍率", "长边", "短边"])
+        self.assertEqual(optional["image_edge_length"][1]["default"], 1024)
+        self.assertEqual(
+            list(required)[:3],
+            ["media_manifest", "image_scale", "scale_method"],
+        )
+
+    def test_frontend_labels_edge_resize_controls(self):
+        self.assertIn('widgetByName(node, "image_resize_mode")', self.web_source)
+        self.assertIn('widgetByName(node, "image_edge_length")', self.web_source)
+        self.assertIn('resizeModeWidget.label = "图片缩放模式"', self.web_source)
+        self.assertIn('edgeLengthWidget.label = "目标长/短边（像素）"', self.web_source)
 
     def test_frontend_supports_multi_select_preview_order_and_resize(self):
         self.assertIn("input.multiple = true;", self.web_source)

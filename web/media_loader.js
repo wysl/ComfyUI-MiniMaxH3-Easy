@@ -143,8 +143,12 @@ function setupMediaLoader(node) {
     hideManifestWidget(manifestWidget);
     const scaleWidget = widgetByName(node, "image_scale");
     const methodWidget = widgetByName(node, "scale_method");
-    if (scaleWidget) scaleWidget.label = "图片缩放倍率";
+    const resizeModeWidget = widgetByName(node, "image_resize_mode");
+    const edgeLengthWidget = widgetByName(node, "image_edge_length");
+    if (scaleWidget) scaleWidget.label = "图片缩放倍率（倍率模式）";
     if (methodWidget) methodWidget.label = "图片缩放算法";
+    if (resizeModeWidget) resizeModeWidget.label = "图片缩放模式";
+    if (edgeLengthWidget) edgeLengthWidget.label = "目标长/短边（像素）";
     if (node.__h3MediaLoaderWidget) {
         node.__h3MediaLoaderRender?.();
         return;
