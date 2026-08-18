@@ -111,14 +111,17 @@ function wrapGetCombo(node) {
     if (node?.type !== GET_NODE_TYPE) return;
     const widget = node.widgets?.[0];
     const options = widget?.options;
-    if (!widget || !options || options.__h3MultiSetValues) return;
+    if (!widget || !options) return;
 
-    const descriptor = Object.getOwnPropertyDescriptor(options, "values");
-    const readOriginal = () => {
-        let values = descriptor?.get ? descriptor.get.call(options) : descriptor?.value;
-        if (typeof values === "function") values = values();
-        return Array.isArray(values) ? values : [];
-    };
+    if (!options.__h3MultiSetValues) {
+        const descriptor = Object.getOwnPropertyDescriptor(options, "values");
+        widget.__h3MultiSetOriginalValues = () => {
+            let values = descriptor?.get ? descriptor.get.call(options) : descriptor?.value;
+            if (typeof values === "function") values = values();
+            return Array.isArray(values) ? values : [];
+        };
+    }
+    const readOriginal = widget.__h3MultiSetOriginalValues || (() => []);
     const wrapped = { ...options, __h3MultiSetValues: true };
     Object.defineProperty(wrapped, "values", {
         configurable: true,
@@ -126,6 +129,14 @@ function wrapGetCombo(node) {
         get: () => [...new Set([...readOriginal(), ...multiSetNames(node.graph)])].sort(),
     });
     widget.options = wrapped;
+
+    // Vue nodes cache combo options by object identity. Reinsert the widget so
+    // newly connected or renamed Multi Set entries become visible immediately.
+    const index = node.widgets.indexOf(widget);
+    if (index >= 0) {
+        node.widgets.splice(index, 1);
+        node.widgets.splice(index, 0, widget);
+    }
 }
 
 function refreshGetNodes(graph) {

@@ -39,6 +39,12 @@ class MultiSetNodeTests(unittest.TestCase):
         self.assertIn("prototype.getInputLink = function getMultiSetInputLink", self.source)
         self.assertIn("...multiSetNames(node.graph)", self.source)
 
+    def test_get_combo_is_remounted_when_multi_set_values_change(self):
+        self.assertNotIn("options.__h3MultiSetValues) return", self.source)
+        self.assertIn("widget.options = wrapped;", self.source)
+        self.assertIn("node.widgets.splice(index, 1);", self.source)
+        self.assertIn("node.widgets.splice(index, 0, widget);", self.source)
+
     def test_has_no_control_after_generate_option(self):
         self.assertNotIn("addValueControlWidgets", self.source)
         self.assertNotIn("control_after_generate", self.source)
