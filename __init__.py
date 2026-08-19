@@ -1,5 +1,6 @@
 from .nodes import (
     MiniMaxH3Easy,
+    MiniMaxH3EasyAreaSwitch,
     MiniMaxH3EasyAudioLock,
     MiniMaxH3EasyChromaContext,
     MiniMaxH3EasyFaceRefine,
@@ -23,6 +24,7 @@ NODE_CLASS_MAPPINGS = {
     "MiniMaxH3EasyMediaLoader": MiniMaxH3EasyMediaLoader,
     "MiniMaxH3EasyMultiSet": MiniMaxH3EasyMultiSet,
     "MiniMaxH3Easy": MiniMaxH3Easy,
+    "MiniMaxH3EasyAreaSwitch": MiniMaxH3EasyAreaSwitch,
     "MiniMaxH3EasyOutput": MiniMaxH3EasyOutput,
     "MiniMaxH3EasyFaceRefine": MiniMaxH3EasyFaceRefine,
     "MiniMaxH3EasyAudioLock": MiniMaxH3EasyAudioLock,
@@ -39,6 +41,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3EasyMediaLoader": "MiniMax H3 Easy 多媒体加载",
     "MiniMaxH3EasyMultiSet": "Multi Set",
     "MiniMaxH3Easy": "MiniMax H3 Easy",
+    "MiniMaxH3EasyAreaSwitch": "MiniMax H3 Easy 功能区路由",
     "MiniMaxH3EasyOutput": "MiniMax H3 Easy Output",
     "MiniMaxH3EasyFaceRefine": "MiniMax H3 Easy Distant Face Refine",
     "MiniMaxH3EasyAudioLock": "MiniMax H3 Easy Audio Lock",

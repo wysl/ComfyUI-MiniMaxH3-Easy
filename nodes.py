@@ -2221,6 +2221,64 @@ class MiniMaxH3EasyMultiSet:
         return _select_h3_multi_set_outputs(kwargs, H3_MULTI_SET_MAX_PAIRS)
 
 
+class MiniMaxH3EasyAreaSwitch:
+    """Select one function-area output without evaluating the other branch."""
+
+    CATEGORY = "MiniMax H3 Easy/Utilities"
+    FUNCTION = "route"
+    RETURN_TYPES = (H3_ANY_TYPE,)
+    RETURN_NAMES = ("selected",)
+    DESCRIPTION = (
+        "Route one of two function-area outputs. Inputs are lazy, so the bypassed "
+        "area is never evaluated. Auto sync follows the Ignore Groups GuHai node."
+    )
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "use_first": (
+                    "BOOLEAN",
+                    {
+                        "default": True,
+                        "label_on": "反推",
+                        "label_off": "不反推",
+                    },
+                ),
+                "first_area": (
+                    "STRING",
+                    {"default": "反推", "multiline": False},
+                ),
+                "second_area": (
+                    "STRING",
+                    {"default": "不反推", "multiline": False},
+                ),
+                "auto_sync": (
+                    "BOOLEAN",
+                    {
+                        "default": True,
+                        "label_on": "自动跟随忽略多组",
+                        "label_off": "手动控制",
+                    },
+                ),
+            },
+            "optional": {
+                "first": (H3_ANY_TYPE, {"lazy": True}),
+                "second": (H3_ANY_TYPE, {"lazy": True}),
+            },
+        }
+
+    @staticmethod
+    def check_lazy_status(use_first, first=None, second=None, **_kwargs):
+        selected_name = "first" if bool(use_first) else "second"
+        selected_value = first if selected_name == "first" else second
+        return [selected_name] if selected_value is None else []
+
+    @staticmethod
+    def route(use_first, first=None, second=None, **_kwargs):
+        return (first if bool(use_first) else second,)
+
+
 class MiniMaxH3EasyMediaLoader:
     CATEGORY = "MiniMax H3 Easy"
     FUNCTION = "load_media"
