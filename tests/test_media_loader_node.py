@@ -105,6 +105,11 @@ class MediaLoaderNodeTests(unittest.TestCase):
         self.assertEqual(target_size(1920, 1080, 1.0, "短边", 720), (1280, 720))
         self.assertEqual(target_size(800, 1200, 1.0, "short edge", 400), (400, 600))
 
+    def test_no_resize_mode_keeps_original_size(self):
+        target_size = self.symbols["_h3_media_target_size"]
+
+        self.assertEqual(target_size(1920, 1080, 4.0, "不缩放", 256), (1920, 1080))
+
     def test_outputs_are_three_independent_comfy_lists(self):
         node = self.symbols["MiniMaxH3EasyMediaLoader"]
 
@@ -125,8 +130,9 @@ class MediaLoaderNodeTests(unittest.TestCase):
         self.assertIn("image_resize_mode", optional)
         self.assertIn("image_edge_length", optional)
         self.assertEqual(required["image_scale"][1]["default"], 1.0)
+        self.assertEqual(required["image_scale"][1]["step"], 0.01)
         self.assertIn("lanczos", required["scale_method"][0])
-        self.assertEqual(optional["image_resize_mode"][0], ["倍率", "长边", "短边"])
+        self.assertEqual(optional["image_resize_mode"][0], ["不缩放", "倍率", "长边", "短边"])
         self.assertEqual(optional["image_edge_length"][1]["default"], 1024)
         self.assertEqual(
             list(required)[:3],
@@ -136,8 +142,11 @@ class MediaLoaderNodeTests(unittest.TestCase):
     def test_frontend_labels_edge_resize_controls(self):
         self.assertIn('widgetByName(node, "image_resize_mode")', self.web_source)
         self.assertIn('widgetByName(node, "image_edge_length")', self.web_source)
-        self.assertIn('resizeModeWidget.label = "图片缩放模式"', self.web_source)
-        self.assertIn('edgeLengthWidget.label = "目标长/短边（像素）"', self.web_source)
+        self.assertIn('resizeModeWidget.label = "图片缩放模式（唯一生效规则）"', self.web_source)
+        self.assertIn('"自定义缩放倍率（当前生效）"', self.web_source)
+        self.assertIn('"目标边长/像素（当前生效）"', self.web_source)
+        self.assertIn('"当前：保持原图尺寸"', self.web_source)
+        self.assertIn('watchResizeControls(node);', self.web_source)
 
     def test_frontend_supports_multi_select_preview_order_and_resize(self):
         self.assertIn("input.multiple = true;", self.web_source)

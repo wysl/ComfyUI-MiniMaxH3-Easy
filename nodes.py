@@ -2110,6 +2110,9 @@ def _h3_media_target_size(
     target_edge = max(1, int(edge_length))
     mode = str(resize_mode).strip().lower()
 
+    if mode in {"不缩放", "原图", "none", "original", "disabled"}:
+        return source_width, source_height
+
     if mode in {"长边", "long edge", "long_edge"}:
         if source_width >= source_height:
             return target_edge, max(1, round(source_height * target_edge / source_width))
@@ -2215,8 +2218,8 @@ class MiniMaxH3EasyMediaLoader:
     OUTPUT_IS_LIST = (True, True, True)
     DESCRIPTION = (
         "Load ordered image, audio, and video lists without mixing media types. "
-        "Images can resize by scale factor, long edge, or short edge while preserving "
-        "each source image's aspect ratio."
+        "Image resize mode is the only active resize rule: scale mode uses the custom "
+        "factor, while long-edge and short-edge modes use only the target edge length."
     )
 
     @classmethod
@@ -2229,7 +2232,7 @@ class MiniMaxH3EasyMediaLoader:
                 ),
                 "image_scale": (
                     "FLOAT",
-                    {"default": 1.0, "min": 0.1, "max": 8.0, "step": 0.05},
+                    {"default": 1.0, "min": 0.01, "max": 16.0, "step": 0.01},
                 ),
                 "scale_method": (
                     ["lanczos", "bicubic", "bilinear", "area", "nearest-exact"],
@@ -2238,7 +2241,7 @@ class MiniMaxH3EasyMediaLoader:
             },
             "optional": {
                 "image_resize_mode": (
-                    ["倍率", "长边", "短边"],
+                    ["不缩放", "倍率", "长边", "短边"],
                     {"default": "倍率"},
                 ),
                 "image_edge_length": (

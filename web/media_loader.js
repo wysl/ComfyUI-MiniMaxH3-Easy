@@ -138,6 +138,63 @@ function createIconButton(label, title, className = "") {
     return button;
 }
 
+function normalizedResizeMode(value) {
+    const mode = String(value || "倍率").trim().toLowerCase();
+    if (["不缩放", "原图", "none", "original", "disabled"].includes(mode)) return "none";
+    if (["长边", "long edge", "long_edge"].includes(mode)) return "long_edge";
+    if (["短边", "short edge", "short_edge"].includes(mode)) return "short_edge";
+    return "scale";
+}
+
+function refreshResizeControls(node) {
+    const scaleWidget = widgetByName(node, "image_scale");
+    const methodWidget = widgetByName(node, "scale_method");
+    const resizeModeWidget = widgetByName(node, "image_resize_mode");
+    const edgeLengthWidget = widgetByName(node, "image_edge_length");
+    const mode = normalizedResizeMode(resizeModeWidget?.value);
+    const usesScale = mode === "scale";
+    const usesEdge = mode === "long_edge" || mode === "short_edge";
+
+    if (resizeModeWidget) resizeModeWidget.label = "图片缩放模式（唯一生效规则）";
+    if (scaleWidget) {
+        scaleWidget.label = usesScale ? "自定义缩放倍率（当前生效）" : "自定义缩放倍率（已忽略）";
+    }
+    if (edgeLengthWidget) {
+        edgeLengthWidget.label = usesEdge ? "目标边长/像素（当前生效）" : "目标边长/像素（已忽略）";
+    }
+    if (methodWidget) {
+        methodWidget.label = mode === "none" ? "缩放算法（已忽略）" : "图片缩放算法";
+    }
+
+    const status = node.__h3MediaLoaderResizeStatus;
+    if (status) {
+        if (mode === "none") {
+            status.textContent = "当前：保持原图尺寸";
+        } else if (mode === "long_edge") {
+            status.textContent = `当前：长边缩放至 ${edgeLengthWidget?.value ?? 1024}px（倍率不生效）`;
+        } else if (mode === "short_edge") {
+            status.textContent = `当前：短边缩放至 ${edgeLengthWidget?.value ?? 1024}px（倍率不生效）`;
+        } else {
+            status.textContent = `当前：按自定义倍率 ×${Number(scaleWidget?.value ?? 1).toFixed(2)} 缩放（边长不生效）`;
+        }
+    }
+    node.setDirtyCanvas?.(true, true);
+}
+
+function watchResizeControls(node) {
+    for (const name of ["image_resize_mode", "image_scale", "image_edge_length"]) {
+        const widget = widgetByName(node, name);
+        if (!widget || widget.__h3MediaLoaderWatched) continue;
+        widget.__h3MediaLoaderWatched = true;
+        const originalCallback = widget.callback;
+        widget.callback = function h3MediaLoaderResizeChanged() {
+            const result = originalCallback?.apply(this, arguments);
+            refreshResizeControls(node);
+            return result;
+        };
+    }
+}
+
 function setupMediaLoader(node) {
     const manifestWidget = widgetByName(node, MANIFEST_WIDGET);
     hideManifestWidget(manifestWidget);
@@ -145,10 +202,8 @@ function setupMediaLoader(node) {
     const methodWidget = widgetByName(node, "scale_method");
     const resizeModeWidget = widgetByName(node, "image_resize_mode");
     const edgeLengthWidget = widgetByName(node, "image_edge_length");
-    if (scaleWidget) scaleWidget.label = "图片缩放倍率（倍率模式）";
-    if (methodWidget) methodWidget.label = "图片缩放算法";
-    if (resizeModeWidget) resizeModeWidget.label = "图片缩放模式";
-    if (edgeLengthWidget) edgeLengthWidget.label = "目标长/短边（像素）";
+    watchResizeControls(node);
+    refreshResizeControls(node);
     if (node.__h3MediaLoaderWidget) {
         node.__h3MediaLoaderRender?.();
         return;
@@ -159,6 +214,8 @@ function setupMediaLoader(node) {
 
     const root = document.createElement("div");
     root.className = "h3-media-loader";
+    const resizeStatus = document.createElement("div");
+    resizeStatus.className = "h3-media-resize-status";
     const tabs = document.createElement("div");
     tabs.className = "h3-media-tabs";
     const toolbar = document.createElement("div");
@@ -170,7 +227,7 @@ function setupMediaLoader(node) {
     toolbar.append(addButton, clearButton, status);
     const content = document.createElement("div");
     content.className = "h3-media-content";
-    root.append(tabs, toolbar, content);
+    root.append(resizeStatus, tabs, toolbar, content);
 
     const state = { activeKind: "images", uploading: false, drag: null };
 
@@ -391,7 +448,9 @@ function setupMediaLoader(node) {
     domWidget.options.canvasOnly = false;
     node.__h3MediaLoaderWidget = domWidget;
     node.__h3MediaLoaderRoot = root;
+    node.__h3MediaLoaderResizeStatus = resizeStatus;
     node.__h3MediaLoaderRender = render;
+    refreshResizeControls(node);
     render();
 }
 
@@ -401,6 +460,7 @@ function installStyles() {
     style.id = "h3-media-loader-styles";
     style.textContent = `
         .h3-media-loader { width:100%; height:100%; min-width:0; min-height:0; box-sizing:border-box; display:flex; flex-direction:column; gap:6px; overflow:hidden; color:var(--input-text, #ddd); font:12px sans-serif; }
+        .h3-media-resize-status { flex:0 0 auto; min-width:0; padding:6px 8px; overflow:hidden; border:1px solid var(--border-color, #444); border-radius:5px; background:var(--comfy-input-bg, #222); color:var(--input-text, #ddd); font-variant-numeric:tabular-nums; text-overflow:ellipsis; white-space:nowrap; }
         .h3-media-tabs { flex:0 0 auto; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:2px; padding:2px; background:var(--comfy-input-bg, #222); border:1px solid var(--border-color, #444); border-radius:6px; }
         .h3-media-tab { min-width:0; height:26px; padding:0 5px; border:0; border-radius:4px; background:transparent; color:inherit; cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .h3-media-tab.is-active { background:var(--comfy-menu-bg, #333); box-shadow:inset 0 0 0 1px var(--border-color, #555); }
@@ -455,6 +515,7 @@ app.registerExtension({
             this.__h3MediaLoaderRoot?.remove?.();
             this.__h3MediaLoaderWidget = null;
             this.__h3MediaLoaderRoot = null;
+            this.__h3MediaLoaderResizeStatus = null;
             this.__h3MediaLoaderRender = null;
             return originalRemoved?.apply(this, arguments);
         };
