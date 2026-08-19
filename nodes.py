@@ -2104,6 +2104,7 @@ def _h3_media_target_size(
     scale: float,
     resize_mode: str = "倍率",
     edge_length: int = 1024,
+    divisible_by: int = 1,
 ) -> tuple[int, int]:
     source_width = max(1, int(width))
     source_height = max(1, int(height))
@@ -2115,16 +2116,24 @@ def _h3_media_target_size(
 
     if mode in {"长边", "long edge", "long_edge"}:
         if source_width >= source_height:
-            return target_edge, max(1, round(source_height * target_edge / source_width))
-        return max(1, round(source_width * target_edge / source_height)), target_edge
-
-    if mode in {"短边", "short edge", "short_edge"}:
+            target_width, target_height = target_edge, max(1, round(source_height * target_edge / source_width))
+        else:
+            target_width, target_height = max(1, round(source_width * target_edge / source_height)), target_edge
+    elif mode in {"短边", "short edge", "short_edge"}:
         if source_width <= source_height:
-            return target_edge, max(1, round(source_height * target_edge / source_width))
-        return max(1, round(source_width * target_edge / source_height)), target_edge
+            target_width, target_height = target_edge, max(1, round(source_height * target_edge / source_width))
+        else:
+            target_width, target_height = max(1, round(source_width * target_edge / source_height)), target_edge
+    else:
+        factor = max(0.01, float(scale))
+        target_width = max(1, round(source_width * factor))
+        target_height = max(1, round(source_height * factor))
 
-    factor = max(0.01, float(scale))
-    return max(1, round(source_width * factor)), max(1, round(source_height * factor))
+    size_factor = max(1, int(divisible_by))
+    if size_factor > 1:
+        target_width = max(size_factor, target_width - (target_width % size_factor))
+        target_height = max(size_factor, target_height - (target_height % size_factor))
+    return target_width, target_height
 
 
 def _resize_h3_media_image(
@@ -2133,6 +2142,7 @@ def _resize_h3_media_image(
     method: str,
     resize_mode: str = "倍率",
     edge_length: int = 1024,
+    divisible_by: int = 1,
 ) -> torch.Tensor:
     if not isinstance(image, torch.Tensor) or image.ndim != 4:
         raise TypeError("Loaded images must use ComfyUI's [batch, height, width, channels] layout")
@@ -2143,6 +2153,7 @@ def _resize_h3_media_image(
         scale,
         resize_mode,
         edge_length,
+        divisible_by,
     )
     if target_width == source_width and target_height == source_height:
         return image
@@ -2248,6 +2259,10 @@ class MiniMaxH3EasyMediaLoader:
                     "INT",
                     {"default": 1024, "min": 1, "max": 16384, "step": 8},
                 ),
+                "image_divisible_by": (
+                    "INT",
+                    {"default": 1, "min": 1, "max": 512, "step": 1},
+                ),
             },
         }
 
@@ -2258,6 +2273,7 @@ class MiniMaxH3EasyMediaLoader:
         scale_method="lanczos",
         image_resize_mode="倍率",
         image_edge_length=1024,
+        image_divisible_by=1,
     ):
         manifest = _parse_h3_media_manifest(media_manifest)
         validation_error = _validate_h3_media_manifest(manifest)
@@ -2275,6 +2291,7 @@ class MiniMaxH3EasyMediaLoader:
                     str(scale_method),
                     str(image_resize_mode),
                     int(image_edge_length),
+                    int(image_divisible_by),
                 )
             )
 
@@ -2302,6 +2319,7 @@ class MiniMaxH3EasyMediaLoader:
         scale_method="lanczos",
         image_resize_mode="倍率",
         image_edge_length=1024,
+        image_divisible_by=1,
     ):
         manifest = _parse_h3_media_manifest(media_manifest)
         signature = [
@@ -2309,6 +2327,7 @@ class MiniMaxH3EasyMediaLoader:
             str(scale_method),
             str(image_resize_mode),
             str(int(image_edge_length)),
+            str(int(image_divisible_by)),
         ]
         for media_type in ("images", "audios", "videos"):
             for name in manifest[media_type]:

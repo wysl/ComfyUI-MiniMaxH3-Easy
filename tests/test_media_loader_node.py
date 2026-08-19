@@ -110,6 +110,17 @@ class MediaLoaderNodeTests(unittest.TestCase):
 
         self.assertEqual(target_size(1920, 1080, 4.0, "不缩放", 256), (1920, 1080))
 
+    def test_custom_divisible_factor_aligns_both_dimensions(self):
+        target_size = self.symbols["_h3_media_target_size"]
+
+        self.assertEqual(target_size(1920, 1080, 1.0, "倍率", 1024, 32), (1920, 1056))
+        self.assertEqual(target_size(800, 1200, 1.0, "长边", 1000, 64), (640, 960))
+
+    def test_no_resize_mode_ignores_divisible_factor(self):
+        target_size = self.symbols["_h3_media_target_size"]
+
+        self.assertEqual(target_size(101, 51, 2.0, "不缩放", 1024, 32), (101, 51))
+
     def test_outputs_are_three_independent_comfy_lists(self):
         node = self.symbols["MiniMaxH3EasyMediaLoader"]
 
@@ -129,11 +140,13 @@ class MediaLoaderNodeTests(unittest.TestCase):
         self.assertIn("scale_method", required)
         self.assertIn("image_resize_mode", optional)
         self.assertIn("image_edge_length", optional)
+        self.assertIn("image_divisible_by", optional)
         self.assertEqual(required["image_scale"][1]["default"], 1.0)
         self.assertEqual(required["image_scale"][1]["step"], 0.01)
         self.assertIn("lanczos", required["scale_method"][0])
         self.assertEqual(optional["image_resize_mode"][0], ["不缩放", "倍率", "长边", "短边"])
         self.assertEqual(optional["image_edge_length"][1]["default"], 1024)
+        self.assertEqual(optional["image_divisible_by"][1]["default"], 1)
         self.assertEqual(
             list(required)[:3],
             ["media_manifest", "image_scale", "scale_method"],
@@ -145,7 +158,9 @@ class MediaLoaderNodeTests(unittest.TestCase):
         self.assertIn('resizeModeWidget.label = "图片缩放模式（唯一生效规则）"', self.web_source)
         self.assertIn('"自定义缩放倍率（当前生效）"', self.web_source)
         self.assertIn('"目标边长/像素（当前生效）"', self.web_source)
-        self.assertIn('"当前：保持原图尺寸"', self.web_source)
+        self.assertIn('"当前：保持原图尺寸（其他缩放参数均不生效）"', self.web_source)
+        self.assertIn('widgetByName(node, "image_divisible_by")', self.web_source)
+        self.assertIn('"尺寸因数（宽高可整除，1=关闭）"', self.web_source)
         self.assertIn('watchResizeControls(node);', self.web_source)
 
     def test_frontend_supports_multi_select_preview_order_and_resize(self):

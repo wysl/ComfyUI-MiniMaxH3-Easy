@@ -151,6 +151,7 @@ function refreshResizeControls(node) {
     const methodWidget = widgetByName(node, "scale_method");
     const resizeModeWidget = widgetByName(node, "image_resize_mode");
     const edgeLengthWidget = widgetByName(node, "image_edge_length");
+    const divisibleByWidget = widgetByName(node, "image_divisible_by");
     const mode = normalizedResizeMode(resizeModeWidget?.value);
     const usesScale = mode === "scale";
     const usesEdge = mode === "long_edge" || mode === "short_edge";
@@ -165,24 +166,31 @@ function refreshResizeControls(node) {
     if (methodWidget) {
         methodWidget.label = mode === "none" ? "缩放算法（已忽略）" : "图片缩放算法";
     }
+    if (divisibleByWidget) {
+        divisibleByWidget.label = mode === "none"
+            ? "尺寸因数（已忽略）"
+            : "尺寸因数（宽高可整除，1=关闭）";
+    }
 
     const status = node.__h3MediaLoaderResizeStatus;
     if (status) {
+        const divisibleBy = Math.max(1, Number.parseInt(divisibleByWidget?.value ?? 1, 10) || 1);
+        const factorNote = divisibleBy > 1 ? `；宽高对齐因数 ${divisibleBy}` : "；尺寸因数关闭";
         if (mode === "none") {
-            status.textContent = "当前：保持原图尺寸";
+            status.textContent = "当前：保持原图尺寸（其他缩放参数均不生效）";
         } else if (mode === "long_edge") {
-            status.textContent = `当前：长边缩放至 ${edgeLengthWidget?.value ?? 1024}px（倍率不生效）`;
+            status.textContent = `当前：长边缩放至 ${edgeLengthWidget?.value ?? 1024}px（倍率不生效）${factorNote}`;
         } else if (mode === "short_edge") {
-            status.textContent = `当前：短边缩放至 ${edgeLengthWidget?.value ?? 1024}px（倍率不生效）`;
+            status.textContent = `当前：短边缩放至 ${edgeLengthWidget?.value ?? 1024}px（倍率不生效）${factorNote}`;
         } else {
-            status.textContent = `当前：按自定义倍率 ×${Number(scaleWidget?.value ?? 1).toFixed(2)} 缩放（边长不生效）`;
+            status.textContent = `当前：按自定义倍率 ×${Number(scaleWidget?.value ?? 1).toFixed(2)} 缩放（边长不生效）${factorNote}`;
         }
     }
     node.setDirtyCanvas?.(true, true);
 }
 
 function watchResizeControls(node) {
-    for (const name of ["image_resize_mode", "image_scale", "image_edge_length"]) {
+    for (const name of ["image_resize_mode", "image_scale", "image_edge_length", "image_divisible_by"]) {
         const widget = widgetByName(node, name);
         if (!widget || widget.__h3MediaLoaderWatched) continue;
         widget.__h3MediaLoaderWatched = true;
