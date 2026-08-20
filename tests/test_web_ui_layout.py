@@ -36,6 +36,14 @@ class H3WebUILayoutTests(unittest.TestCase):
         configure_source = self.source[configure_start:configure_end]
         self.assertIn("syncModeWidgets(this, true);", configure_source)
 
+    def test_external_prompt_traces_selected_area_switch_branch(self):
+        self.assertIn('const AREA_SWITCH_CLASS = "MiniMaxH3EasyAreaSwitch";', self.source)
+        self.assertIn("function resolvePromptSourceNode(node, visited = new Set())", self.source)
+        self.assertIn('const selectedInput = useFirst ? "first" : "second";', self.source)
+        self.assertIn("return Number(promptSourceNode(candidate)?.id) === sourceId;", self.source)
+        self.assertIn("function installAreaSwitchReferenceWatcher(nodeType, nodeData)", self.source)
+        self.assertIn("refreshIfRouteChanged(this);", self.source)
+
 
 if __name__ == "__main__":
     unittest.main()

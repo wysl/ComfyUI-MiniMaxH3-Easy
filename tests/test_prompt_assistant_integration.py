@@ -14,7 +14,7 @@ PROJECT_ROOT = Path(__file__).parents[1]
 def load_integration_classes():
     source_path = PROJECT_ROOT / "nodes.py"
     tree = ast.parse(source_path.read_text(encoding="utf-8"))
-    names = {"MiniMaxH3Context", "MiniMaxH3EasyOutput"}
+    names = {"MiniMaxH3Context", "MiniMaxH3EasyOutput", "MiniMaxH3EasyPrompt"}
     definitions = [
         node
         for node in tree.body
@@ -35,13 +35,27 @@ def load_integration_classes():
         "h3": SimpleNamespace(CANVAS_MULTIPLE=32),
     }
     exec(compile(module, str(source_path), "exec"), namespace)
-    return namespace["MiniMaxH3Context"], namespace["MiniMaxH3EasyOutput"]
+    return (
+        namespace["MiniMaxH3Context"],
+        namespace["MiniMaxH3EasyOutput"],
+        namespace["MiniMaxH3EasyPrompt"],
+    )
 
 
 class PromptAssistantIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.context_class, cls.output_class = load_integration_classes()
+        cls.context_class, cls.output_class, cls.prompt_class = load_integration_classes()
+
+    def test_standalone_prompt_node_outputs_plain_string(self):
+        self.assertEqual(
+            self.prompt_class.get_prompt("  prompt with @Picture1  "),
+            ("  prompt with @Picture1  ",),
+        )
+        self.assertEqual(
+            self.prompt_class.INPUT_TYPES()["required"]["prompt"][1]["multiline"],
+            True,
+        )
 
     def make_context(self, encoder=None):
         image = object()

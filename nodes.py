@@ -961,6 +961,41 @@ class MiniMaxH3Easy:
         return model, context
 
 
+class MiniMaxH3EasyPrompt:
+    """Standalone prompt editor source for a MiniMax H3 Easy node.
+
+    The browser extension turns its ``@`` mentions into H3 runtime reference
+    placeholders when this output is connected to an H3 prompt input. Keeping
+    the backend contract as a regular STRING lets it compose with native
+    ComfyUI text nodes and avoids duplicating media inputs.
+    """
+
+    CATEGORY = "MiniMax H3 Easy"
+    FUNCTION = "get_prompt"
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("prompt",)
+    DESCRIPTION = "Edit a MiniMax H3 prompt in a separate node. Type @ to reference media connected to the target H3 node."
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "prompt": (
+                    "STRING",
+                    {
+                        "multiline": True,
+                        "dynamicPrompts": True,
+                        "default": "",
+                    },
+                ),
+            }
+        }
+
+    @staticmethod
+    def get_prompt(prompt):
+        return (str(prompt or ""),)
+
+
 class MiniMaxH3EasyOutput:
     CATEGORY = "MiniMax H3 Easy"
     FUNCTION = "unpack"
@@ -2562,6 +2597,7 @@ class MiniMaxH3EasyFrameInterpolation:
 
 NODE_CLASS_MAPPINGS = {
     "MiniMaxH3EasyLoader": MiniMaxH3EasyLoader,
+    "MiniMaxH3EasyPrompt": MiniMaxH3EasyPrompt,
     "MiniMaxH3Easy": MiniMaxH3Easy,
     "MiniMaxH3EasyOutput": MiniMaxH3EasyOutput,
     "MiniMaxH3EasyFaceRefine": MiniMaxH3EasyFaceRefine,

@@ -2,6 +2,8 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
 const NODE_CLASS = "MiniMaxH3Easy";
+const PROMPT_CLASS = "MiniMaxH3EasyPrompt";
+const AREA_SWITCH_CLASS = "MiniMaxH3EasyAreaSwitch";
 const LOADER_CLASS = "MiniMaxH3EasyLoader";
 const OUTPUT_CLASS = "MiniMaxH3EasyOutput";
 const SAVE_CLASS = "MiniMaxH3EasySaveVideo";
@@ -38,12 +40,14 @@ const TEXT = {
     mentionTitle: ZH_BROWSER ? "\u5f15\u7528\u7d20\u6750" : "Reference media",
     mentionEmpty: ZH_BROWSER ? "\u5148\u5c06\u7d20\u6750\u8fde\u63a5\u5230\u4e3b\u8282\u70b9" : "Connect media to the main node first",
     mainTitle: "MiniMax H3 Easy",
+    promptNodeTitle: ZH_BROWSER ? "\u004d\u0069\u006e\u0069\u004d\u0061\u0078 H3 Easy \u63d0\u793a\u8bcd" : "MiniMax H3 Easy Prompt",
     loaderTitle: ZH_BROWSER ? "MiniMax H3 Easy \u52a0\u8f7d\u5668" : "MiniMax H3 Easy Loader",
     outputTitle: ZH_BROWSER ? "MiniMax H3 Easy \u8f93\u51fa" : "MiniMax H3 Easy Output",
     saveTitle: ZH_BROWSER ? "MiniMax H3 Easy \u4fdd\u5b58\u89c6\u9891" : "MiniMax H3 Easy Save Video",
     category: "MiniMax H3 Easy",
     mode: ZH_BROWSER ? "\u6a21\u5f0f" : "Mode",
     prompt: ZH_BROWSER ? "\u63d0\u793a\u8bcd" : "Prompt",
+    promptOutput: ZH_BROWSER ? "\u63d0\u793a\u8bcd" : "Prompt",
     resolution: ZH_BROWSER ? "\u5206\u8fa8\u7387" : "Resolution",
     aspectRatio: ZH_BROWSER ? "\u5bbd\u9ad8\u6bd4" : "Aspect ratio",
     width: ZH_BROWSER ? "\u5bbd\u5ea6" : "Width",
@@ -197,6 +201,10 @@ function isTarget(node) {
     return String(node?.comfyClass || node?.type || node?.constructor?.nodeData?.name || "") === NODE_CLASS;
 }
 
+function isPromptNode(node) {
+    return String(node?.comfyClass || node?.type || node?.constructor?.nodeData?.name || "") === PROMPT_CLASS;
+}
+
 function isLoader(node) {
     return String(node?.comfyClass || node?.type || node?.constructor?.nodeData?.name || "") === LOADER_CLASS;
 }
@@ -254,6 +262,16 @@ function setLocalizedSlotLabel(slot, label) {
 
 function localizeNodeInstance(node) {
     if (!node) return;
+    if (isPromptNode(node)) {
+        node.title = TEXT.promptNodeTitle;
+        for (const widget of node.widgets || []) {
+            if (widget.name === "prompt") widget.label = TEXT.prompt;
+        }
+        for (const output of node.outputs || []) {
+            if (String(output.name || "").toLowerCase() === "prompt") setLocalizedSlotLabel(output, TEXT.promptOutput);
+        }
+        return;
+    }
     if (isLoader(node)) {
         node.title = TEXT.loaderTitle;
         const labels = { fl2va_model: TEXT.fl2vaModel, ref2va_model: TEXT.ref2vaModel, text_encoder: TEXT.textEncoder, video_vae: TEXT.videoVae, audio_vae: TEXT.audioVae };
@@ -323,8 +341,10 @@ function localizeNodeInstance(node) {
 }
 
 function localizeNodeDefinition(nodeData) {
-    if (!nodeData || ![NODE_CLASS, LOADER_CLASS, OUTPUT_CLASS, SAVE_CLASS].includes(nodeData.name)) return;
-    nodeData.display_name = nodeData.name === LOADER_CLASS
+    if (!nodeData || ![NODE_CLASS, PROMPT_CLASS, LOADER_CLASS, OUTPUT_CLASS, SAVE_CLASS].includes(nodeData.name)) return;
+    nodeData.display_name = nodeData.name === PROMPT_CLASS
+        ? TEXT.promptNodeTitle
+        : nodeData.name === LOADER_CLASS
         ? TEXT.loaderTitle
         : nodeData.name === SAVE_CLASS
             ? TEXT.saveTitle
@@ -365,8 +385,70 @@ function asBoolean(value, fallback = false) {
     return value == null ? fallback : Boolean(value);
 }
 
+function linkOriginId(link, graph) {
+    if (link == null) return null;
+    const resolved = typeof link === "object" ? link : getNativeGraphLink(graph, link);
+    const raw = resolved?.origin_id ?? resolved?.originId
+        ?? resolved?.from_id ?? resolved?.fromId
+        ?? resolved?.source_id ?? resolved?.sourceId;
+    if (raw != null && Number.isFinite(Number(raw))) return Number(raw);
+    if (Array.isArray(link) && Number.isFinite(Number(link[0]))) return Number(link[0]);
+    return null;
+}
+
+function promptTargetNodes(promptNode) {
+    if (!isPromptNode(promptNode)) return [];
+    const graph = promptNode.graph || app.graph;
+    const sourceId = Number(promptNode.id);
+    if (!Number.isFinite(sourceId)) return [];
+    return (graph?._nodes || []).filter((candidate) => {
+        if (!isTarget(candidate)) return false;
+        return Number(promptSourceNode(candidate)?.id) === sourceId;
+    }).sort((left, right) => Number(left.id) - Number(right.id));
+}
+
+function mentionHostNode(node) {
+    if (isTarget(node)) return node;
+    return promptTargetNodes(node)[0] || null;
+}
+
+function inputSourceNode(node, inputName) {
+    const graph = node?.graph || app.graph;
+    const input = node?.inputs?.find((entry) => String(entry?.name || "") === inputName);
+    const sourceId = linkOriginId(input?.link, graph);
+    return Number.isFinite(sourceId) ? graph?.getNodeById?.(sourceId) || null : null;
+}
+
+function resolvePromptSourceNode(node, visited = new Set()) {
+    if (!node) return null;
+    const nodeId = Number(node.id);
+    if (Number.isFinite(nodeId)) {
+        if (visited.has(nodeId)) return null;
+        visited.add(nodeId);
+    }
+    if (isPromptNode(node)) return node;
+    const nodeType = String(node?.comfyClass || node?.type || node?.constructor?.nodeData?.name || "");
+    if (nodeType !== AREA_SWITCH_CLASS) return null;
+    const useFirst = asBoolean(getWidgetValue(node, "use_first", true), true);
+    const selectedInput = useFirst ? "first" : "second";
+    return resolvePromptSourceNode(inputSourceNode(node, selectedInput), visited);
+}
+
+function promptSourceNode(targetNode) {
+    if (!isTarget(targetNode)) return null;
+    return resolvePromptSourceNode(inputSourceNode(targetNode, "prompt"));
+}
+
+function promptSourceNodeFromSerialized(targetNode, serializedNode) {
+    const graph = targetNode?.graph || app.graph;
+    const sourceId = linkOriginId(serializedNode?.inputs?.prompt, graph);
+    const sourceNode = Number.isFinite(sourceId) ? graph?.getNodeById?.(sourceId) || null : null;
+    return resolvePromptSourceNode(sourceNode);
+}
+
 function isReferenceMode(node) {
-    return canonicalOption("mode", getWidgetValue(node, "mode", MODE_IMAGE)) === MODE_REFERENCE;
+    const host = mentionHostNode(node);
+    return Boolean(host) && canonicalOption("mode", getWidgetValue(host, "mode", MODE_IMAGE)) === MODE_REFERENCE;
 }
 
 function isCustomResolution(node) {
@@ -378,7 +460,8 @@ function isAdvancedEnabled(node) {
 }
 
 function referenceMentionMode(node) {
-    const value = canonicalOption("reference_mention_mode", getWidgetValue(node, "reference_mention_mode", "index"));
+    const host = mentionHostNode(node) || node;
+    const value = canonicalOption("reference_mention_mode", getWidgetValue(host, "reference_mention_mode", "index"));
     return value === "index" ? "index" : "filename";
 }
 
@@ -1400,6 +1483,13 @@ function patchGraphToPrompt() {
                 promptNode.inputs[`media_${index + 1}`] = [String(link.source_id), slot];
                 promptNode.inputs[`media_type_${index + 1}`] = String(link.media_type || "image");
             });
+            const externalPromptNode = promptSourceNode(node) || promptSourceNodeFromSerialized(node, promptNode);
+            const externalPromptData = externalPromptNode && output[String(externalPromptNode.id)];
+            if (externalPromptNode && isPromptNode(externalPromptNode) && externalPromptData) {
+                if (externalPromptNode.__h3Editor) syncPromptFromEditor(externalPromptNode, false);
+                externalPromptData.inputs ||= {};
+                externalPromptData.inputs.prompt = buildRuntimePrompt(externalPromptNode, runtimeLinks);
+            }
             setPromptInputIfUnlinked(promptNode, "prompt", buildRuntimePrompt(node, runtimeLinks));
             setPromptInputIfUnlinked(promptNode, "mode", canonicalOption("mode", getWidgetValue(node, "mode", MODE_IMAGE)));
             setPromptInputIfUnlinked(promptNode, "resolution", canonicalOption("resolution", getWidgetValue(node, "resolution", "480P")));
@@ -1481,8 +1571,9 @@ function truncateMentionLabel(value, maxLength = 22) {
 }
 
 function mentionOptions(node) {
-    if (!isReferenceMode(node)) return [];
-    const links = normalizeLinks(node);
+    const host = mentionHostNode(node);
+    if (!host || !isReferenceMode(host)) return [];
+    const links = normalizeLinks(host);
     const mediaOrder = { image: 0, video: 1, audio: 2 };
     const orderedLinks = links
         .map((link, index) => ({ link, index }))
@@ -1583,8 +1674,9 @@ function getNodeVideoSrc(node) {
 
 function refreshMentionPreviews() {
     for (const node of app.graph?._nodes || []) {
-        if (!isTarget(node)) continue;
-        normalizeLinks(node);
+        if (!isTarget(node) && !isPromptNode(node)) continue;
+        const host = mentionHostNode(node);
+        if (host) normalizeLinks(host);
         if (!isReferenceMode(node)) {
             closeMentionMenu(node);
             continue;
@@ -1615,6 +1707,7 @@ function refreshMentionPreviews() {
             });
         }
         if (node.__h3Editor) syncPromptFromEditor(node, false);
+        if (isPromptNode(node)) syncEditorMode(node);
         const menu = node.__h3MentionMenu;
         if (menu) {
             const query = String(menu.mention?.query || "").toLowerCase();
@@ -2721,7 +2814,7 @@ function syncEditorThemes(force = false) {
     if (!force && lastVueNodesMode === modern) return;
     lastVueNodesMode = modern;
     for (const node of app.graph?._nodes || []) {
-        if (!isTarget(node)) continue;
+        if (!isTarget(node) && !isPromptNode(node)) continue;
         applyNativeEditorTheme(node.__h3EditorWrap);
         applyNativeEditorTheme(node.__h3MentionMenu?.element);
     }
@@ -3979,6 +4072,142 @@ function installNode(nodeType, nodeData) {
     };
 }
 
+function installPromptNode(nodeType, nodeData) {
+    if (nodeData?.name !== PROMPT_CLASS) return;
+    if (nodeType.prototype.__h3EasyPromptNodeInstalled) return;
+    nodeType.prototype.__h3EasyPromptNodeInstalled = true;
+
+    const originalCreated = nodeType.prototype.onNodeCreated;
+    nodeType.prototype.onNodeCreated = function onNodeCreatedH3Prompt() {
+        const result = originalCreated?.apply(this, arguments);
+        this.properties ||= {};
+        localizeNodeInstance(this);
+        patchCanvas();
+        installQuickCreateCapture(app.canvas);
+        installPromptEditorSoon(this);
+        return result;
+    };
+
+    const originalConfigure = nodeType.prototype.onConfigure;
+    nodeType.prototype.onConfigure = function onConfigureH3Prompt(info) {
+        const result = originalConfigure?.apply(this, arguments);
+        if (info?.properties?.[PROMPT_DOC_PROP]) {
+            this.properties ||= {};
+            this.properties[PROMPT_DOC_PROP] = info.properties[PROMPT_DOC_PROP];
+        }
+        localizeNodeInstance(this);
+        renderEditorFromNode(this);
+        resetPromptHistory(this);
+        syncEditorMode(this);
+        requestMentionPreviewRefresh();
+        installPromptEditorSoon(this);
+        repairNodeLayout(this);
+        return result;
+    };
+
+    const originalConnectionsChange = nodeType.prototype.onConnectionsChange;
+    nodeType.prototype.onConnectionsChange = function onConnectionsChangeH3Prompt() {
+        const result = originalConnectionsChange?.apply(this, arguments);
+        requestMentionPreviewRefresh();
+        syncEditorMode(this);
+        this.setDirtyCanvas?.(true, true);
+        return result;
+    };
+
+    const originalSerialize = nodeType.prototype.onSerialize;
+    nodeType.prototype.onSerialize = function onSerializeH3Prompt(info) {
+        if (this.__h3Editor) syncPromptFromEditor(this, false);
+        const result = originalSerialize?.apply(this, arguments);
+        if (info && this.properties?.[PROMPT_DOC_PROP]) {
+            info.properties ||= {};
+            info.properties[PROMPT_DOC_PROP] = this.properties[PROMPT_DOC_PROP];
+        }
+        return result;
+    };
+
+    const originalDraw = nodeType.prototype.onDrawForeground;
+    nodeType.prototype.onDrawForeground = function onDrawForegroundH3Prompt(ctx) {
+        const result = originalDraw?.apply(this, arguments);
+        if (!this.__h3Editor && !this.__h3PromptInstallPending && !this.__h3PromptInstallRetry) installPromptEditorSoon(this);
+        return result;
+    };
+
+    const originalRemoved = nodeType.prototype.onRemoved;
+    nodeType.prototype.onRemoved = function onRemovedH3Prompt() {
+        closeMentionMenu(this);
+        if (this.__h3PromptInstallRetry) clearTimeout(this.__h3PromptInstallRetry);
+        this.__h3PromptInstallRetry = null;
+        this.__h3PromptInstallPending = false;
+        this.__h3PromptInstallAttempts = 0;
+        this.__h3PromptInstallNextAt = 0;
+        this.__h3EditorWrap?.remove?.();
+        this.__h3Editor = null;
+        this.__h3EditorWrap = null;
+        this.__h3DomWidget = null;
+        return originalRemoved?.apply(this, arguments);
+    };
+}
+
+function installAreaSwitchReferenceWatcher(nodeType, nodeData) {
+    if (nodeData?.name !== AREA_SWITCH_CLASS) return;
+    if (nodeType.prototype.__h3EasyAreaSwitchReferenceWatcherInstalled) return;
+    nodeType.prototype.__h3EasyAreaSwitchReferenceWatcherInstalled = true;
+
+    const refreshIfRouteChanged = (node) => {
+        const first = inputSourceNode(node, "first");
+        const second = inputSourceNode(node, "second");
+        const signature = [
+            asBoolean(getWidgetValue(node, "use_first", true), true) ? "first" : "second",
+            first?.id ?? "",
+            second?.id ?? "",
+        ].join(":");
+        if (node.__h3AreaSwitchReferenceSignature === signature) return;
+        node.__h3AreaSwitchReferenceSignature = signature;
+        requestMentionPreviewRefresh();
+    };
+
+    const originalCreated = nodeType.prototype.onNodeCreated;
+    nodeType.prototype.onNodeCreated = function onNodeCreatedH3AreaSwitch() {
+        const result = originalCreated?.apply(this, arguments);
+        const useFirstWidget = getWidget(this, "use_first");
+        if (useFirstWidget && !useFirstWidget.__h3ReferenceRefreshCallbackBound) {
+            useFirstWidget.__h3ReferenceRefreshCallbackBound = true;
+            const originalCallback = useFirstWidget.callback;
+            useFirstWidget.callback = (value) => {
+                const callbackResult = originalCallback?.call(useFirstWidget, value);
+                this.__h3AreaSwitchReferenceSignature = null;
+                requestMentionPreviewRefresh();
+                return callbackResult;
+            };
+        }
+        refreshIfRouteChanged(this);
+        return result;
+    };
+
+    const originalConfigure = nodeType.prototype.onConfigure;
+    nodeType.prototype.onConfigure = function onConfigureH3AreaSwitch(info) {
+        const result = originalConfigure?.apply(this, arguments);
+        this.__h3AreaSwitchReferenceSignature = null;
+        refreshIfRouteChanged(this);
+        return result;
+    };
+
+    const originalConnectionsChange = nodeType.prototype.onConnectionsChange;
+    nodeType.prototype.onConnectionsChange = function onConnectionsChangeH3AreaSwitch() {
+        const result = originalConnectionsChange?.apply(this, arguments);
+        this.__h3AreaSwitchReferenceSignature = null;
+        refreshIfRouteChanged(this);
+        return result;
+    };
+
+    const originalDraw = nodeType.prototype.onDrawForeground;
+    nodeType.prototype.onDrawForeground = function onDrawForegroundH3AreaSwitch(ctx) {
+        const result = originalDraw?.apply(this, arguments);
+        refreshIfRouteChanged(this);
+        return result;
+    };
+}
+
 function installLoaderNode(nodeType, nodeData) {
     if (nodeData?.name !== LOADER_CLASS) return;
     if (nodeType.prototype.__h3EasyLoaderInstalled) return;
@@ -4240,6 +4469,8 @@ app.registerExtension({
         installLoaderNode(nodeType, nodeData);
         installOutputNode(nodeType, nodeData);
         installSaveVideoNode(nodeType, nodeData);
+        installPromptNode(nodeType, nodeData);
+        installAreaSwitchReferenceWatcher(nodeType, nodeData);
         installNode(nodeType, nodeData);
     },
 });
