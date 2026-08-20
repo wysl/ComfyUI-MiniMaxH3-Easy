@@ -102,6 +102,16 @@ ASPECT_RATIOS = {
     ASPECT_WIDESCREEN: (16, 9),
     ASPECT_ULTRAWIDE: (21, 9),
 }
+ASPECT_SELECTOR_LABELS = {
+    ASPECT_SQUARE: "1:1 (Square)",
+    ASPECT_PHOTO_PORTRAIT: "2:3 (Portrait Photo)",
+    ASPECT_PHOTO: "3:2 (Photo)",
+    ASPECT_STANDARD_PORTRAIT: "3:4 (Portrait Standard)",
+    ASPECT_STANDARD: "4:3 (Standard)",
+    ASPECT_WIDESCREEN_PORTRAIT: "9:16 (Portrait Widescreen)",
+    ASPECT_WIDESCREEN: "16:9 (Widescreen)",
+    ASPECT_ULTRAWIDE: "21:9 (Ultrawide)",
+}
 MAX_MEDIA = 15
 MAX_IMAGES = 9
 MAX_VIDEOS = 3
@@ -482,6 +492,12 @@ class MiniMaxH3Bundle:
 
 
 @dataclass(frozen=True)
+class _MiniMaxH3KeyframeSource:
+    resolved_frame_index: int
+    image: torch.Tensor
+
+
+@dataclass(frozen=True)
 class MiniMaxH3Context:
     conditioning: Any
     latent: Any
@@ -496,6 +512,8 @@ class MiniMaxH3Context:
     seconds: float = 5.0
     width: int = 0
     height: int = 0
+    aspect_ratio: str = ASPECT_WIDESCREEN
+    keyframe_sources: tuple[_MiniMaxH3KeyframeSource, ...] = ()
 
     def prompt_assistant_payload(self) -> dict[str, Any]:
         """Expose the original generation inputs without importing either plugin."""
@@ -531,7 +549,10 @@ class MiniMaxH3Context:
     def encode_prompt(self, prompt: str):
         if not callable(self._prompt_encoder):
             raise ValueError("This H3 Context cannot encode a replacement prompt")
-        return self._prompt_encoder(str(prompt))
+        encoded = self._prompt_encoder(str(prompt))
+        if isinstance(encoded, (tuple, list)) and len(encoded) >= 2:
+            return encoded[0], encoded[1]
+        raise ValueError("The H3 prompt encoder returned an invalid conditioning result")
 
 
 @dataclass(frozen=True)
@@ -678,14 +699,19 @@ def _empty_image_conditioning(bundle, prompt, width, height, length, first_frame
     latent, frame_count = h3._empty_av_latent(width, height, length)
     images = []
     keyframes = []
+    keyframe_sources = []
     if first_frame is not None:
-        image = h3._resize(first_frame[:1], width, height, "disabled")
+        source = first_frame[:1]
+        image = h3._resize(source, width, height, "disabled")
         images.append(image)
         keyframes.append({"resolved_frame_index": 0, "image": image})
+        keyframe_sources.append(_MiniMaxH3KeyframeSource(0, source))
     if last_frame is not None:
-        image = h3._resize(last_frame[:1], width, height, "center")
+        source = last_frame[:1]
+        image = h3._resize(source, width, height, "center")
         images.append(image)
         keyframes.append({"resolved_frame_index": frame_count - 1, "image": image})
+        keyframe_sources.append(_MiniMaxH3KeyframeSource(frame_count - 1, source))
 
     tokens = bundle.clip.tokenize(prompt, images=images)
     conditioning = bundle.clip.encode_from_tokens_scheduled(tokens)
@@ -696,7 +722,7 @@ def _empty_image_conditioning(bundle, prompt, width, height, length, first_frame
             "minimax_keyframes": keyframes,
             "minimax_frame_count": frame_count,
         })
-    return conditioning, latent
+    return conditioning, latent, tuple(keyframe_sources)
 
 
 def _reference_conditioning(
@@ -921,7 +947,15 @@ class MiniMaxH3Easy:
         else:
             first_frame, last_frame = cls._keyframes(items, keyframe_role)
             model = h3_bundle.model_for("fl2va")
-            conditioning, latent = _empty_image_conditioning(h3_bundle, prompt, width, height, length, first_frame, last_frame)
+            conditioning, latent, keyframe_sources = _empty_image_conditioning(
+                h3_bundle,
+                prompt,
+                width,
+                height,
+                length,
+                first_frame,
+                last_frame,
+            )
             context_mode = MODE_IMAGE
             context_media_items = []
             keyframe_role_items = []
@@ -943,6 +977,8 @@ class MiniMaxH3Easy:
                 last_frame=last_frame,
             )
             context_prompt = str(prompt or "")
+        if context_mode == MODE_REFERENCE:
+            keyframe_sources = ()
         context = MiniMaxH3Context(
             conditioning=conditioning,
             latent=latent,
@@ -954,8 +990,10 @@ class MiniMaxH3Easy:
             height=int(height),
             prompt=context_prompt,
             mode=context_mode,
+            aspect_ratio=str(aspect_ratio),
             media=context_media,
             keyframe_roles=keyframe_roles,
+            keyframe_sources=tuple(keyframe_sources),
             _prompt_encoder=prompt_encoder,
         )
         return model, context
@@ -1054,6 +1092,111 @@ class MiniMaxH3EasyOutput:
             scaled_width,
             scaled_height,
         )
+
+
+class MiniMaxH3EasyAspectRatio:
+    """Expose the resolved aspect ratio for downstream resolution controls."""
+
+    CATEGORY = "MiniMax H3 Easy"
+    FUNCTION = "extract"
+    RETURN_TYPES = (H3_ANY_TYPE,)
+    RETURN_NAMES = ("aspect_ratio",)
+    DESCRIPTION = "Read the aspect ratio selected by MiniMax H3 Easy for downstream resolution nodes."
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "h3_context": ("MINIMAX_H3_CONTEXT",),
+            },
+        }
+
+    @staticmethod
+    def extract(h3_context):
+        if not isinstance(h3_context, MiniMaxH3Context):
+            raise ValueError("Connect the H3 Context output from a MiniMax H3 Easy node")
+        try:
+            return (ASPECT_SELECTOR_LABELS[str(h3_context.aspect_ratio)],)
+        except KeyError as exc:
+            raise ValueError(f"Unsupported MiniMax H3 aspect ratio: {h3_context.aspect_ratio}") from exc
+
+
+class MiniMaxH3EasySecondPassConditioning:
+    """Rebuild resolution-bound keyframes for a second-pass video latent."""
+
+    CATEGORY = "MiniMax H3 Easy"
+    FUNCTION = "rebuild"
+    RETURN_TYPES = ("CONDITIONING",)
+    RETURN_NAMES = ("second_pass_positive",)
+    DESCRIPTION = (
+        "Re-encode first/last frame conditioning at the second-pass resolution "
+        "while preserving text and reference-media conditioning."
+    )
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "h3_context": ("MINIMAX_H3_CONTEXT",),
+                "second_pass_video_latent": ("LATENT",),
+            },
+        }
+
+    @staticmethod
+    def _target_dimensions(second_pass_video_latent):
+        if not isinstance(second_pass_video_latent, Mapping):
+            raise ValueError(
+                "Connect the video-only LATENT produced by the second-pass VAE Encode node"
+            )
+        samples = second_pass_video_latent.get("samples")
+        if not isinstance(samples, torch.Tensor) or samples.ndim != 5:
+            raise ValueError(
+                "Second-pass input must be a video-only LATENT tensor with shape [B, C, T, H, W]"
+            )
+        if samples.shape[1] != 24:
+            raise ValueError(
+                "Connect the 24-channel video LATENT before Concat AV Latent, not the combined AV latent"
+            )
+        return int(samples.shape[-1]) * 16, int(samples.shape[-2]) * 16, samples.shape[-2:]
+
+    @classmethod
+    def rebuild(cls, h3_context, second_pass_video_latent):
+        if not isinstance(h3_context, MiniMaxH3Context):
+            raise ValueError("Connect the H3 Context output from a MiniMax H3 Easy node")
+
+        conditioning = node_helpers.conditioning_set_values(h3_context.conditioning, {})
+        if not h3_context.keyframe_sources:
+            return (conditioning,)
+
+        target_width, target_height, target_latent_shape = cls._target_dimensions(
+            second_pass_video_latent
+        )
+        keyframes = []
+        for source in h3_context.keyframe_sources:
+            if not isinstance(source.image, torch.Tensor) or source.image.ndim != 4:
+                raise ValueError(
+                    "The original MiniMax H3 keyframe source is unavailable; run the Easy node again"
+                )
+            resized = h3._resize(source.image[:1], target_width, target_height, "center")
+            latent = h3_context.video_vae.encode(resized)
+            if (
+                not isinstance(latent, torch.Tensor)
+                or latent.ndim != 5
+                or latent.shape[-2:] != target_latent_shape
+            ):
+                raise ValueError(
+                    "The rebuilt MiniMax H3 keyframe does not match the second-pass video latent resolution"
+                )
+            keyframes.append({
+                "resolved_frame_index": source.resolved_frame_index,
+                "latent": latent,
+            })
+
+        conditioning = node_helpers.conditioning_set_values(
+            conditioning,
+            {"minimax_keyframes": keyframes},
+        )
+        return (conditioning,)
 
 
 def _face_refine_prompt(
@@ -2600,6 +2743,8 @@ NODE_CLASS_MAPPINGS = {
     "MiniMaxH3EasyPrompt": MiniMaxH3EasyPrompt,
     "MiniMaxH3Easy": MiniMaxH3Easy,
     "MiniMaxH3EasyOutput": MiniMaxH3EasyOutput,
+    "MiniMaxH3EasyAspectRatio": MiniMaxH3EasyAspectRatio,
+    "MiniMaxH3EasySecondPassConditioning": MiniMaxH3EasySecondPassConditioning,
     "MiniMaxH3EasyFaceRefine": MiniMaxH3EasyFaceRefine,
     "MiniMaxH3EasyAudioLock": MiniMaxH3EasyAudioLock,
     "MiniMaxH3EasyReplaceVideoFrames": MiniMaxH3EasyReplaceVideoFrames,

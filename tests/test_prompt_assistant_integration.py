@@ -30,6 +30,7 @@ def load_integration_classes():
     namespace = {
         "Any": Any,
         "MODE_IMAGE": "image",
+        "ASPECT_WIDESCREEN": "16:9",
         "dataclass": dataclass,
         "_video_parts": lambda _value: (None, None, 24.0),
         "h3": SimpleNamespace(CANVAS_MULTIPLE=32),

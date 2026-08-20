@@ -44,6 +44,11 @@ class H3WebUILayoutTests(unittest.TestCase):
         self.assertIn("function installAreaSwitchReferenceWatcher(nodeType, nodeData)", self.source)
         self.assertIn("refreshIfRouteChanged(this);", self.source)
 
+    def test_pass2_nodes_are_localized(self):
+        self.assertIn('const ASPECT_RATIO_CLASS = "MiniMaxH3EasyAspectRatio";', self.source)
+        self.assertIn('const SECOND_PASS_CLASS = "MiniMaxH3EasySecondPassConditioning";', self.source)
+        self.assertIn("TEXT.secondPassTitle", self.source)
+
 
 if __name__ == "__main__":
     unittest.main()

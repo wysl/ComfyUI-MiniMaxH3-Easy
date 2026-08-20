@@ -4,6 +4,8 @@ import { api } from "../../scripts/api.js";
 const NODE_CLASS = "MiniMaxH3Easy";
 const PROMPT_CLASS = "MiniMaxH3EasyPrompt";
 const AREA_SWITCH_CLASS = "MiniMaxH3EasyAreaSwitch";
+const ASPECT_RATIO_CLASS = "MiniMaxH3EasyAspectRatio";
+const SECOND_PASS_CLASS = "MiniMaxH3EasySecondPassConditioning";
 const LOADER_CLASS = "MiniMaxH3EasyLoader";
 const OUTPUT_CLASS = "MiniMaxH3EasyOutput";
 const SAVE_CLASS = "MiniMaxH3EasySaveVideo";
@@ -41,6 +43,8 @@ const TEXT = {
     mentionEmpty: ZH_BROWSER ? "\u5148\u5c06\u7d20\u6750\u8fde\u63a5\u5230\u4e3b\u8282\u70b9" : "Connect media to the main node first",
     mainTitle: "MiniMax H3 Easy",
     promptNodeTitle: ZH_BROWSER ? "\u004d\u0069\u006e\u0069\u004d\u0061\u0078 H3 Easy \u63d0\u793a\u8bcd" : "MiniMax H3 Easy Prompt",
+    aspectRatioNodeTitle: ZH_BROWSER ? "MiniMax H3 Easy \u5bbd\u9ad8\u6bd4" : "MiniMax H3 Easy Aspect Ratio",
+    secondPassTitle: ZH_BROWSER ? "MiniMax H3 Easy \u4e8c\u91c7 Conditioning" : "MiniMax H3 Easy Second Pass Conditioning",
     loaderTitle: ZH_BROWSER ? "MiniMax H3 Easy \u52a0\u8f7d\u5668" : "MiniMax H3 Easy Loader",
     outputTitle: ZH_BROWSER ? "MiniMax H3 Easy \u8f93\u51fa" : "MiniMax H3 Easy Output",
     saveTitle: ZH_BROWSER ? "MiniMax H3 Easy \u4fdd\u5b58\u89c6\u9891" : "MiniMax H3 Easy Save Video",
@@ -205,6 +209,14 @@ function isPromptNode(node) {
     return String(node?.comfyClass || node?.type || node?.constructor?.nodeData?.name || "") === PROMPT_CLASS;
 }
 
+function isAspectRatioNode(node) {
+    return String(node?.comfyClass || node?.type || node?.constructor?.nodeData?.name || "") === ASPECT_RATIO_CLASS;
+}
+
+function isSecondPassNode(node) {
+    return String(node?.comfyClass || node?.type || node?.constructor?.nodeData?.name || "") === SECOND_PASS_CLASS;
+}
+
 function isLoader(node) {
     return String(node?.comfyClass || node?.type || node?.constructor?.nodeData?.name || "") === LOADER_CLASS;
 }
@@ -262,6 +274,27 @@ function setLocalizedSlotLabel(slot, label) {
 
 function localizeNodeInstance(node) {
     if (!node) return;
+    if (isAspectRatioNode(node)) {
+        node.title = TEXT.aspectRatioNodeTitle;
+        for (const input of node.inputs || []) {
+            if (input.name === "h3_context") setLocalizedSlotLabel(input, TEXT.outputContext);
+        }
+        for (const output of node.outputs || []) {
+            if (String(output.name || "").toLowerCase() === "aspect_ratio") setLocalizedSlotLabel(output, TEXT.aspectRatio);
+        }
+        return;
+    }
+    if (isSecondPassNode(node)) {
+        node.title = TEXT.secondPassTitle;
+        for (const input of node.inputs || []) {
+            if (input.name === "h3_context") setLocalizedSlotLabel(input, TEXT.outputContext);
+            if (input.name === "second_pass_video_latent") setLocalizedSlotLabel(input, TEXT.outputLatent);
+        }
+        for (const output of node.outputs || []) {
+            if (String(output.name || "").toLowerCase() === "second_pass_positive") setLocalizedSlotLabel(output, TEXT.outputConditioning);
+        }
+        return;
+    }
     if (isPromptNode(node)) {
         node.title = TEXT.promptNodeTitle;
         for (const widget of node.widgets || []) {
@@ -341,9 +374,13 @@ function localizeNodeInstance(node) {
 }
 
 function localizeNodeDefinition(nodeData) {
-    if (!nodeData || ![NODE_CLASS, PROMPT_CLASS, LOADER_CLASS, OUTPUT_CLASS, SAVE_CLASS].includes(nodeData.name)) return;
+    if (!nodeData || ![NODE_CLASS, PROMPT_CLASS, ASPECT_RATIO_CLASS, SECOND_PASS_CLASS, LOADER_CLASS, OUTPUT_CLASS, SAVE_CLASS].includes(nodeData.name)) return;
     nodeData.display_name = nodeData.name === PROMPT_CLASS
         ? TEXT.promptNodeTitle
+        : nodeData.name === ASPECT_RATIO_CLASS
+            ? TEXT.aspectRatioNodeTitle
+        : nodeData.name === SECOND_PASS_CLASS
+            ? TEXT.secondPassTitle
         : nodeData.name === LOADER_CLASS
         ? TEXT.loaderTitle
         : nodeData.name === SAVE_CLASS
