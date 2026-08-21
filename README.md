@@ -13,6 +13,11 @@ hard to read and harder to learn.
 
 ## Updates
 
+### 2026-08-21
+
+- Fixed **MiniMax H3 Easy Second Pass Conditioning** for I2V first-frame and first/last-frame workflows: after a latent upscale it now rebuilds both boundary keyframes at the padded H3 patch grid, including odd latent widths or heights.
+- Older serialized H3 Contexts without source pixels now resize their stored keyframe latents instead of silently reusing the old resolution, preventing `condition video` token-count mismatches in `SamplerCustomAdvanced`.
+
 ### 2026-08-17
 
 - Distant Face Refine now defaults to identity-only prompting when an identity image is connected, preventing later scenes' camera, environment, and lighting instructions from changing facial geometry, skin tone, or exposure.
@@ -242,6 +247,15 @@ Per-second indexes use `floor(second index × FPS)`. For a 5-second, 24 FPS vide
 with 121 frames, the batch contains frames `0, 24, 48, 72, 96`, while `Last
 frame` returns frame `120`. The node reads the actual frame count automatically
 and uses it to prevent out-of-range extraction.
+
+### MiniMax H3 Easy Second Pass Conditioning
+
+Place this node between **H3 Context** and the second-pass guider. Connect the
+video-only 24-channel latent after the spatial latent upscaler to its second
+input. It synchronizes first-frame and first/last-frame conditioning with the
+upscaled latent before `SamplerCustomAdvanced`. The node also handles older
+contexts that retained encoded keyframes but no longer have the original image
+pixels.
 
 ### MiniMax H3 Easy Frame Interpolation
 

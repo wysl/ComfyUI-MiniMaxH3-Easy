@@ -1122,7 +1122,7 @@ class MiniMaxH3EasyAspectRatio:
 
 
 class MiniMaxH3EasySecondPassConditioning:
-    """Rebuild resolution-bound keyframes for a second-pass video latent."""
+    """Synchronize first/last-frame conditioning with a resized video latent."""
 
     CATEGORY = "MiniMax H3 Easy"
     FUNCTION = "rebuild"
@@ -1157,40 +1157,131 @@ class MiniMaxH3EasySecondPassConditioning:
             raise ValueError(
                 "Connect the 24-channel video LATENT before Concat AV Latent, not the combined AV latent"
             )
-        return int(samples.shape[-1]) * 16, int(samples.shape[-2]) * 16, samples.shape[-2:]
+        # MiniMax H3 patchifies video spatially with a 2x2 patch. The model
+        # pads the sampled latent to an even H/W before building its layout,
+        # so conditioning must use that same padded grid or token counts drift.
+        actual_height = int(samples.shape[-2])
+        actual_width = int(samples.shape[-1])
+        latent_height = (actual_height + 1) // 2 * 2
+        latent_width = (actual_width + 1) // 2 * 2
+        return actual_width * 16, actual_height * 16, (latent_height, latent_width)
+
+    @staticmethod
+    def _conditioning_keyframes(conditioning):
+        """Read keyframes from ordinary ComfyUI conditioning metadata."""
+        if isinstance(conditioning, Mapping):
+            values = conditioning.get("values")
+            if isinstance(values, Mapping) and values.get("minimax_keyframes") is not None:
+                return values["minimax_keyframes"]
+            if conditioning.get("minimax_keyframes") is not None:
+                return conditioning["minimax_keyframes"]
+            return None
+        if not isinstance(conditioning, (list, tuple)):
+            return None
+        for entry in conditioning:
+            if not isinstance(entry, (list, tuple)) or len(entry) < 2:
+                continue
+            metadata = entry[1]
+            if isinstance(metadata, Mapping) and metadata.get("minimax_keyframes") is not None:
+                return metadata["minimax_keyframes"]
+        return None
+
+    @staticmethod
+    def _resize_keyframe_latent(latent, target_latent_shape):
+        if not isinstance(latent, torch.Tensor) or latent.ndim != 5:
+            raise ValueError("MiniMax H3 keyframe conditioning contains an invalid latent")
+        if latent.shape[1] != 24:
+            raise ValueError("MiniMax H3 keyframe conditioning must use a 24-channel video latent")
+        target_height, target_width = map(int, target_latent_shape)
+        if tuple(latent.shape[-2:]) == (target_height, target_width):
+            return latent
+
+        batch, channels, time, source_height, source_width = latent.shape
+        # Interpolate each temporal slice independently. Casting through fp32
+        # also keeps CPU execution working for half-precision latent tensors.
+        spatial = latent.permute(0, 2, 1, 3, 4).reshape(
+            batch * time, channels, source_height, source_width
+        )
+        resized = functional.interpolate(
+            spatial.to(dtype=torch.float32),
+            size=(target_height, target_width),
+            mode="bilinear",
+            align_corners=False,
+        )
+        return resized.to(dtype=latent.dtype).reshape(
+            batch, time, channels, target_height, target_width
+        ).permute(0, 2, 1, 3, 4).contiguous()
+
+    @staticmethod
+    def _pad_keyframe_latent(latent, target_latent_shape):
+        target_height, target_width = map(int, target_latent_shape)
+        pad_height = target_height - int(latent.shape[-2])
+        pad_width = target_width - int(latent.shape[-1])
+        if pad_height < 0 or pad_width < 0:
+            raise ValueError("MiniMax H3 keyframe latent exceeds the second-pass patch grid")
+        if pad_height == 0 and pad_width == 0:
+            return latent
+        # Match comfy.ldm.common_dit.pad_to_patch_size, which uses circular
+        # padding before patchify_video when an Upscaler leaves an odd grid.
+        return functional.pad(
+            latent,
+            (0, pad_width, 0, pad_height, 0, 0),
+            mode="circular",
+        )
 
     @classmethod
     def rebuild(cls, h3_context, second_pass_video_latent):
         if not isinstance(h3_context, MiniMaxH3Context):
             raise ValueError("Connect the H3 Context output from a MiniMax H3 Easy node")
 
-        conditioning = node_helpers.conditioning_set_values(h3_context.conditioning, {})
-        if not h3_context.keyframe_sources:
-            return (conditioning,)
-
         target_width, target_height, target_latent_shape = cls._target_dimensions(
             second_pass_video_latent
         )
+        samples = second_pass_video_latent["samples"]
+        actual_latent_shape = tuple(int(value) for value in samples.shape[-2:])
+        conditioning = node_helpers.conditioning_set_values(h3_context.conditioning, {})
         keyframes = []
-        for source in h3_context.keyframe_sources:
-            if not isinstance(source.image, torch.Tensor) or source.image.ndim != 4:
-                raise ValueError(
-                    "The original MiniMax H3 keyframe source is unavailable; run the Easy node again"
-                )
-            resized = h3._resize(source.image[:1], target_width, target_height, "center")
-            latent = h3_context.video_vae.encode(resized)
-            if (
-                not isinstance(latent, torch.Tensor)
-                or latent.ndim != 5
-                or latent.shape[-2:] != target_latent_shape
-            ):
-                raise ValueError(
-                    "The rebuilt MiniMax H3 keyframe does not match the second-pass video latent resolution"
-                )
-            keyframes.append({
-                "resolved_frame_index": source.resolved_frame_index,
-                "latent": latent,
-            })
+        if h3_context.keyframe_sources:
+            # Prefer the original pixels. This avoids compounding interpolation
+            # error when the context still carries the source first/last frame.
+            for source in h3_context.keyframe_sources:
+                if not isinstance(source.image, torch.Tensor) or source.image.ndim != 4:
+                    raise ValueError(
+                        "The original MiniMax H3 keyframe source is unavailable; run the Easy node again"
+                    )
+                crop = "disabled" if int(source.resolved_frame_index) == 0 else "center"
+                resized = h3._resize(source.image[:1], target_width, target_height, crop)
+                latent = h3_context.video_vae.encode(resized)
+                if (
+                    not isinstance(latent, torch.Tensor)
+                    or latent.ndim != 5
+                    or latent.shape[1] != 24
+                    or tuple(latent.shape[-2:]) != actual_latent_shape
+                ):
+                    raise ValueError(
+                        "The rebuilt MiniMax H3 keyframe does not match the second-pass video latent resolution"
+                    )
+                keyframes.append({
+                    "resolved_frame_index": source.resolved_frame_index,
+                    "latent": cls._pad_keyframe_latent(latent, target_latent_shape),
+                })
+        else:
+            # Older serialized contexts may not retain source pixels, while
+            # their conditioning still contains the encoded first/last frames.
+            # Resize those latents instead of silently passing stale dimensions.
+            existing = cls._conditioning_keyframes(h3_context.conditioning)
+            if existing is None:
+                return (conditioning,)
+            for keyframe in existing:
+                if not isinstance(keyframe, Mapping) or "latent" not in keyframe:
+                    raise ValueError("MiniMax H3 keyframe conditioning is missing its latent")
+                keyframes.append({
+                    **keyframe,
+                    "latent": cls._pad_keyframe_latent(
+                        cls._resize_keyframe_latent(keyframe["latent"], actual_latent_shape),
+                        target_latent_shape,
+                    ),
+                })
 
         conditioning = node_helpers.conditioning_set_values(
             conditioning,

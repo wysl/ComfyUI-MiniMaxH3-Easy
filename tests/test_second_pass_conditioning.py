@@ -24,7 +24,7 @@ class _NodeHelpers:
 class _VideoVae:
     def encode(self, image):
         return torch.zeros(
-            (1, 16, 1, image.shape[1] // 16, image.shape[2] // 16),
+            (1, 24, 1, image.shape[1] // 16, image.shape[2] // 16),
             dtype=image.dtype,
         )
 
@@ -51,6 +51,7 @@ def load_classes():
         "H3_ANY_TYPE": "*",
         "dataclass": dataclass,
         "torch": torch,
+        "functional": torch.nn.functional,
         "node_helpers": _NodeHelpers,
         "h3": SimpleNamespace(
             _resize=lambda image, width, height, _crop: torch.zeros(
@@ -102,6 +103,13 @@ class SecondPassConditioningTests(unittest.TestCase):
                 {"samples": torch.zeros((1, 56, 5, 60, 80))}
             )
 
+    def test_second_pass_target_rounds_odd_latent_grid_to_h3_patch_grid(self):
+        width, height, shape = self.second_pass_class._target_dimensions(
+            {"samples": torch.zeros((1, 24, 5, 76, 43))}
+        )
+        self.assertEqual((width, height), (688, 1216))
+        self.assertEqual(tuple(shape), (76, 44))
+
     def test_second_pass_preserves_conditioning_without_keyframes(self):
         context = self.make_context()
         result = self.second_pass_class.rebuild(
@@ -124,6 +132,51 @@ class SecondPassConditioningTests(unittest.TestCase):
         keyframes = result[0]["values"]["minimax_keyframes"]
         self.assertEqual(keyframes[0]["resolved_frame_index"], 0)
         self.assertEqual(tuple(keyframes[0]["latent"].shape[-2:]), (60, 80))
+
+    def test_second_pass_reencodes_both_first_and_last_keyframes(self):
+        sources = (
+            self.keyframe_source(0, torch.zeros((1, 320, 544, 3))),
+            self.keyframe_source(119, torch.ones((1, 320, 544, 3))),
+        )
+        context = self.make_context(sources)
+        result = self.second_pass_class.rebuild(
+            context,
+            {"samples": torch.zeros((1, 24, 5, 76, 43))},
+        )
+        keyframes = result[0]["values"]["minimax_keyframes"]
+        self.assertEqual(
+            [keyframe["resolved_frame_index"] for keyframe in keyframes],
+            [0, 119],
+        )
+        self.assertTrue(all(tuple(keyframe["latent"].shape[-2:]) == (76, 44) for keyframe in keyframes))
+
+    def test_second_pass_resizes_serialized_keyframes_without_source_images(self):
+        old_keyframes = [
+            {
+                "resolved_frame_index": 0,
+                "latent": torch.zeros((1, 24, 1, 60, 34)),
+            },
+            {
+                "resolved_frame_index": 119,
+                "latent": torch.ones((1, 24, 1, 60, 34)),
+            },
+        ]
+        context = self.make_context()
+        context = self.context_class(
+            conditioning=[["embedding", {"minimax_keyframes": old_keyframes}]],
+            latent=context.latent,
+            video_vae=context.video_vae,
+            audio_vae=context.audio_vae,
+            fps=context.fps,
+            keyframe_sources=(),
+        )
+        result = self.second_pass_class.rebuild(
+            context,
+            {"samples": torch.zeros((1, 24, 5, 76, 43))},
+        )
+        keyframes = result[0]["values"]["minimax_keyframes"]
+        self.assertEqual([item["resolved_frame_index"] for item in keyframes], [0, 119])
+        self.assertTrue(all(tuple(item["latent"].shape[-2:]) == (76, 44) for item in keyframes))
 
 
 if __name__ == "__main__":

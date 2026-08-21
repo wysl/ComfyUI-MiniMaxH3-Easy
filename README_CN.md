@@ -12,6 +12,11 @@
 
 ## 更新内容
 
+### 2026-08-21
+
+- 修复 **MiniMax H3 Easy 二采 Conditioning** 在图生视频首帧和首尾帧模式下的尺寸同步：latent 放大后会同时重建首帧、尾帧条件，并按 H3 的 `2x2` patch 网格向上对齐奇数 latent 宽高；
+- 旧版序列化 Context 如果没有保留原图但仍保留已编码的首尾帧 latent，现在会直接调整这些条件 latent，而不是静默沿用旧尺寸，从而避免 `SamplerCustomAdvanced` 的 condition video token 数量不匹配；
+
 ### 2026-08-17
 
 - 远景人脸修复新增默认启用的身份锁定模式：有身份参考图时，只向局部修复模型提交身份、脸型、肤色、曝光和姿态保持指令，不再让后续片段的全景、运镜和光照描述改变人脸；
@@ -211,6 +216,13 @@ FL2VA，参考生视频优先使用 Ref2VA。两种主模型不能同时设置�
 每秒第一帧使用 `floor(秒序号 × FPS)` 计算。例如 5 秒、24 FPS 的 121 帧视频会输出
 第 `0、24、48、72、96` 帧，最后一帧输出第 `120` 帧。实际总帧数由节点自动读取，
 并用于避免抽帧索引越界。
+
+### MiniMax H3 Easy 二采 Conditioning
+
+将此节点放在 **H3 Context** 和二采 guider 之间，并把空间 latent 放大
+节点输出的 24 通道 video-only latent 接到第二个输入。节点会在送入
+`SamplerCustomAdvanced` 前同步首帧或首尾帧条件的空间尺寸；即使是旧版
+Context（只有已编码条件、没有原始图片）也可以完成同步。
 
 ### MiniMax H3 Easy 视频补帧
 
