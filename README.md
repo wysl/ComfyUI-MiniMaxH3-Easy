@@ -19,6 +19,8 @@ hard to read and harder to learn.
 - Added an `input` directory browser with category-specific media selection and image thumbnails with ordering.
 - Local image, audio, and video files can now be dropped directly onto the active media area and are uploaded into the manifest.
 - Added a dedicated `Concatenated image` output that vertically combines selected images in order while preserving the existing `multi output` image list.
+- The media loader now defaults to `0.5` for scale mode and `1024` pixels for long-edge/short-edge modes; image resizing always uses `lanczos`.
+- Added automatic repair for the legacy resize-widget order so older workflows do not pass `lanczos` or `long edge` into the wrong parameter.
 
 ### 2026-08-21
 
