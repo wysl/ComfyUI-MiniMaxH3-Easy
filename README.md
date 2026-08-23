@@ -19,6 +19,9 @@ hard to read and harder to learn.
 - Added an `input` directory browser with category-specific media selection and image thumbnails with ordering.
 - Local image, audio, and video files can now be dropped directly onto the active media area and are uploaded into the manifest.
 - Added a dedicated `Concatenated image` output that vertically combines selected images in order while preserving the existing `multi output` image list.
+- Added **MiniMax H3 Easy Video Black Intro**, which replaces the first user-specified
+  number of seconds with black frames while preserving the source FPS, audio, resolution,
+  metadata, alpha channel, bit depth, and color space.
 
 ### 2026-08-21
 
@@ -265,6 +268,18 @@ Per-second indexes use `floor(second index × FPS)`. For a 5-second, 24 FPS vide
 with 121 frames, the batch contains frames `0, 24, 48, 72, 96`, while `Last
 frame` returns frame `120`. The node reads the actual frame count automatically
 and uses it to prevent out-of-range extraction.
+
+### MiniMax H3 Easy Video Black Intro
+
+Connect a ComfyUI `VIDEO` to this node and enter the number of seconds to replace at
+the beginning. The node reads the input video's real FPS and replaces
+`ceil(seconds × FPS)` frames with full black frames. It keeps the total frame count,
+duration, resolution, audio track, metadata, alpha channel, bit depth, and color space
+unchanged. A value of `0` passes the original video through unchanged. If the requested
+duration is longer than the video, the complete video becomes black.
+
+Audio is intentionally preserved and is not muted during the black interval. If a silent
+black opening is needed, mute or trim the audio separately in the surrounding workflow.
 
 ### MiniMax H3 Easy Second Pass Conditioning
 

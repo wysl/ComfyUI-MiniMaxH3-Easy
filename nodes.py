@@ -2804,6 +2804,72 @@ class MiniMaxH3EasySaveVideo:
         }
 
 
+class MiniMaxH3EasyBlackIntro:
+    CATEGORY = "MiniMax H3 Easy/Video"
+    FUNCTION = "blacken"
+    RETURN_TYPES = ("VIDEO",)
+    RETURN_NAMES = ("video",)
+    DESCRIPTION = (
+        "Replace the first N seconds of a video with full black frames while preserving "
+        "the original FPS, audio, metadata, resolution, and bit depth."
+    )
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "video": ("VIDEO",),
+                "seconds": (
+                    "FLOAT",
+                    {
+                        "default": 0.05,
+                        "min": 0.0,
+                        "max": 3600.0,
+                        "step": 0.01,
+                    },
+                ),
+            }
+        }
+
+    @staticmethod
+    def blacken(video, seconds):
+        components = video.get_components()
+        frames = components.images
+        if frames is None or len(frames.shape) < 1 or int(frames.shape[0]) == 0:
+            raise ValueError("Black intro requires a video with at least one frame")
+
+        duration = float(seconds)
+        frame_rate = float(components.frame_rate or 24.0)
+        if not math.isfinite(duration) or duration < 0:
+            raise ValueError("Black intro duration must be a finite value greater than or equal to zero")
+        if not math.isfinite(frame_rate) or frame_rate <= 0:
+            raise ValueError("Video FPS must be greater than zero")
+
+        frame_count = int(frames.shape[0])
+        black_count = min(frame_count, int(math.ceil(duration * frame_rate)))
+        if black_count <= 0:
+            return (video,)
+
+        black_frames = torch.zeros_like(frames[:black_count])
+        output_frames = torch.cat((black_frames, frames[black_count:]), dim=0)
+        output_video = InputImpl.VideoFromComponents(
+            Types.VideoComponents(
+                images=output_frames,
+                audio=components.audio,
+                frame_rate=components.frame_rate,
+                metadata=getattr(components, "metadata", None),
+                alpha=getattr(components, "alpha", None),
+            ),
+            bit_depth=video.get_bit_depth(),
+            color_space=(
+                video.get_color_space()
+                if hasattr(video, "get_color_space")
+                else "sRGB"
+            ),
+        )
+        return (output_video,)
+
+
 def _rife_vfi_node_class():
     node_class = nodes.NODE_CLASS_MAPPINGS.get("RIFE_VFI_Opt")
     if node_class is None:
@@ -2883,6 +2949,7 @@ NODE_CLASS_MAPPINGS = {
     "MiniMaxH3EasyAudioLock": MiniMaxH3EasyAudioLock,
     "MiniMaxH3EasyReplaceVideoFrames": MiniMaxH3EasyReplaceVideoFrames,
     "MiniMaxH3EasySaveVideo": MiniMaxH3EasySaveVideo,
+    "MiniMaxH3EasyBlackIntro": MiniMaxH3EasyBlackIntro,
     "MiniMaxH3EasyFrameInterpolation": MiniMaxH3EasyFrameInterpolation,
     "MiniMaxH3EasyChromaContext": MiniMaxH3EasyChromaContext,
     "MiniMaxH3EasySeamStabilizer": MiniMaxH3EasySeamStabilizer,
