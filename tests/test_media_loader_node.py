@@ -35,6 +35,7 @@ def load_media_loader_symbols():
         "os": __import__("os"),
         "torch": __import__("torch"),
         "folder_paths": None,
+        "H3_MEDIA_RESIZE_METHOD": "lanczos",
         "H3_MEDIA_EXTENSIONS": {
             "images": {".png", ".jpg"},
             "audios": {".wav", ".mp3"},
@@ -143,9 +144,10 @@ class MediaLoaderNodeTests(unittest.TestCase):
         self.assertIn("scale_method", required)
         self.assertIn("image_edge_length", optional)
         self.assertIn("image_divisible_by", optional)
-        self.assertEqual(required["image_scale"][1]["default"], 1.0)
+        self.assertEqual(required["image_scale"][1]["default"], 0.5)
         self.assertEqual(required["image_scale"][1]["step"], 0.01)
-        self.assertIn("lanczos", required["scale_method"][0])
+        self.assertEqual(required["scale_method"][0], ["lanczos"])
+        self.assertEqual(required["scale_method"][1]["default"], "lanczos")
         self.assertEqual(required["image_resize_mode"][0], ["不缩放", "倍率", "长边", "短边"])
         self.assertEqual(optional["image_edge_length"][1]["default"], 1024)
         self.assertEqual(optional["image_divisible_by"][1]["default"], 1)
@@ -177,6 +179,15 @@ class MediaLoaderNodeTests(unittest.TestCase):
         self.assertIn('widgetByName(node, "image_divisible_by")', self.web_source)
         self.assertIn('"尺寸因数（宽高可整除，1=关闭）"', self.web_source)
         self.assertIn('watchResizeControls(node);', self.web_source)
+
+    def test_frontend_applies_resize_defaults_and_repairs_legacy_order(self):
+        self.assertIn("const DEFAULT_SCALE = 0.5;", self.web_source)
+        self.assertIn("const DEFAULT_EDGE_LENGTH = 1024;", self.web_source)
+        self.assertIn('const FIXED_SCALE_METHOD = "lanczos";', self.web_source)
+        self.assertIn("repairLegacyResizeWidgetValues(node);", self.web_source)
+        self.assertIn("if (mode === \"scale\") changed = setWidgetValue(scaleWidget, DEFAULT_SCALE)", self.web_source)
+        self.assertIn("setWidgetValue(edgeLengthWidget, DEFAULT_EDGE_LENGTH)", self.web_source)
+        self.assertIn("setWidgetValue(methodWidget, FIXED_SCALE_METHOD)", self.web_source)
 
     def test_frontend_supports_multi_select_preview_order_and_resize(self):
         self.assertIn("input.multiple = true;", self.web_source)

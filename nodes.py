@@ -2355,6 +2355,7 @@ H3_MEDIA_EXTENSIONS = {
     "audios": {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"},
     "videos": {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"},
 }
+H3_MEDIA_RESIZE_METHOD = "lanczos"
 
 
 def _validate_h3_media_manifest(manifest: Mapping[str, list[str]]) -> str | None:
@@ -2430,7 +2431,7 @@ def _resize_h3_media_image(
         image.movedim(-1, 1),
         target_width,
         target_height,
-        str(method),
+        H3_MEDIA_RESIZE_METHOD,
         "disabled",
     ).movedim(1, -1)
 
@@ -2599,7 +2600,8 @@ class MiniMaxH3EasyMediaLoader:
     DESCRIPTION = (
         "Load ordered image, audio, and video lists without mixing media types. "
         "Image resize mode is the only active resize rule: scale mode uses the custom "
-        "factor, while long-edge and short-edge modes use only the target edge length."
+        "factor (default 0.5), while long-edge and short-edge modes use only the "
+        "target edge length (default 1024). Lanczos is always used for image scaling."
     )
 
     @classmethod
@@ -2616,11 +2618,11 @@ class MiniMaxH3EasyMediaLoader:
                 ),
                 "image_scale": (
                     "FLOAT",
-                    {"default": 1.0, "min": 0.01, "max": 16.0, "step": 0.01},
+                    {"default": 0.5, "min": 0.01, "max": 16.0, "step": 0.01},
                 ),
                 "scale_method": (
-                    ["lanczos", "bicubic", "bilinear", "area", "nearest-exact"],
-                    {"default": "lanczos"},
+                    [H3_MEDIA_RESIZE_METHOD],
+                    {"default": H3_MEDIA_RESIZE_METHOD},
                 ),
             },
             "optional": {
@@ -2638,7 +2640,7 @@ class MiniMaxH3EasyMediaLoader:
     @staticmethod
     def load_media(
         media_manifest,
-        image_scale=1.0,
+        image_scale=0.5,
         scale_method="lanczos",
         image_resize_mode="倍率",
         image_edge_length=1024,
@@ -2657,7 +2659,7 @@ class MiniMaxH3EasyMediaLoader:
                 _resize_h3_media_image(
                     image,
                     float(image_scale),
-                    str(scale_method),
+                    H3_MEDIA_RESIZE_METHOD,
                     str(image_resize_mode),
                     int(image_edge_length),
                     int(image_divisible_by),
@@ -2685,7 +2687,7 @@ class MiniMaxH3EasyMediaLoader:
     def IS_CHANGED(
         cls,
         media_manifest,
-        image_scale=1.0,
+        image_scale=0.5,
         scale_method="lanczos",
         image_resize_mode="倍率",
         image_edge_length=1024,
@@ -2694,7 +2696,7 @@ class MiniMaxH3EasyMediaLoader:
         manifest = _parse_h3_media_manifest(media_manifest)
         signature = [
             str(float(image_scale)),
-            str(scale_method),
+            H3_MEDIA_RESIZE_METHOD,
             str(image_resize_mode),
             str(int(image_edge_length)),
             str(int(image_divisible_by)),

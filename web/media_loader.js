@@ -4,6 +4,11 @@ import { api } from "../../scripts/api.js";
 const NODE_CLASS = "MiniMaxH3EasyMediaLoader";
 const MANIFEST_WIDGET = "media_manifest";
 const EMPTY_MANIFEST = { version: 1, images: [], audios: [], videos: [] };
+const DEFAULT_SCALE = 0.5;
+const DEFAULT_EDGE_LENGTH = 1024;
+const FIXED_SCALE_METHOD = "lanczos";
+const SCALE_METHODS = new Set(["lanczos", "bicubic", "bilinear", "area", "nearest-exact"]);
+const RESIZE_MODES = new Set(["不缩放", "原图", "倍率", "长边", "短边", "none", "original", "disabled", "long edge", "long_edge", "short edge", "short_edge"]);
 const KIND_CONFIG = {
     images: {
         label: "图片",
@@ -146,6 +151,68 @@ function normalizedResizeMode(value) {
     return "scale";
 }
 
+function isNumericWidgetValue(value) {
+    return value !== null && value !== "" && Number.isFinite(Number(value));
+}
+
+function isScaleMethodValue(value) {
+    return SCALE_METHODS.has(String(value || "").trim().toLowerCase());
+}
+
+function isResizeModeValue(value) {
+    return RESIZE_MODES.has(String(value || "").trim().toLowerCase());
+}
+
+function setWidgetValue(widget, value) {
+    if (!widget || widget.value === value) return false;
+    widget.value = value;
+    if (widget._state) widget._state.value = value;
+    return true;
+}
+
+function repairLegacyResizeWidgetValues(node) {
+    const scaleWidget = widgetByName(node, "image_scale");
+    const methodWidget = widgetByName(node, "scale_method");
+    const resizeModeWidget = widgetByName(node, "image_resize_mode");
+    if (!scaleWidget || !methodWidget || !resizeModeWidget) return false;
+
+    // Older workflows serialized these three widgets as scale, method, mode.
+    // The current schema is mode, scale, method, so identify that shape by type
+    // and restore the values before the controls are rendered or submitted.
+    if (
+        isScaleMethodValue(scaleWidget.value)
+        && isResizeModeValue(methodWidget.value)
+        && isNumericWidgetValue(resizeModeWidget.value)
+    ) {
+        const legacyScale = Number(resizeModeWidget.value);
+        const legacyMode = String(methodWidget.value);
+        setWidgetValue(resizeModeWidget, legacyMode);
+        setWidgetValue(scaleWidget, legacyScale);
+        setWidgetValue(methodWidget, FIXED_SCALE_METHOD);
+        node.graph?.change?.();
+        return true;
+    }
+    return false;
+}
+
+function applyResizeModeDefaults(node, mode) {
+    const previousMode = node.__h3MediaLoaderResizeMode;
+    let changed = false;
+    const scaleWidget = widgetByName(node, "image_scale");
+    const methodWidget = widgetByName(node, "scale_method");
+    const edgeLengthWidget = widgetByName(node, "image_edge_length");
+
+    if (previousMode !== undefined && previousMode !== mode) {
+        if (mode === "scale") changed = setWidgetValue(scaleWidget, DEFAULT_SCALE) || changed;
+        if (mode === "long_edge" || mode === "short_edge") {
+            changed = setWidgetValue(edgeLengthWidget, DEFAULT_EDGE_LENGTH) || changed;
+        }
+    }
+    changed = setWidgetValue(methodWidget, FIXED_SCALE_METHOD) || changed;
+    node.__h3MediaLoaderResizeMode = mode;
+    if (changed) node.graph?.change?.();
+}
+
 function setResizeWidgetVisibility(widget, visible) {
     if (!widget) return;
     if (!widget.__h3MediaLoaderOriginalType) {
@@ -171,6 +238,8 @@ function refreshResizeControls(node) {
     const mode = normalizedResizeMode(resizeModeWidget?.value);
     const usesScale = mode === "scale";
     const usesEdge = mode === "long_edge" || mode === "short_edge";
+
+    applyResizeModeDefaults(node, mode);
 
     setResizeWidgetVisibility(scaleWidget, usesScale);
     setResizeWidgetVisibility(edgeLengthWidget, usesEdge);
@@ -204,7 +273,7 @@ function refreshResizeControls(node) {
         } else if (mode === "short_edge") {
             status.textContent = `当前：短边缩放至 ${edgeLengthWidget?.value ?? 1024}px（倍率不生效）${factorNote}`;
         } else {
-            status.textContent = `当前：按自定义倍率 ×${Number(scaleWidget?.value ?? 1).toFixed(2)} 缩放（边长不生效）${factorNote}`;
+            status.textContent = `当前：按自定义倍率 ×${Number(scaleWidget?.value ?? DEFAULT_SCALE).toFixed(2)} 缩放（边长不生效）${factorNote}`;
         }
     }
     node.setDirtyCanvas?.(true, true);
@@ -227,6 +296,7 @@ function watchResizeControls(node) {
 function setupMediaLoader(node) {
     const manifestWidget = widgetByName(node, MANIFEST_WIDGET);
     hideManifestWidget(manifestWidget);
+    repairLegacyResizeWidgetValues(node);
     const scaleWidget = widgetByName(node, "image_scale");
     const methodWidget = widgetByName(node, "scale_method");
     const resizeModeWidget = widgetByName(node, "image_resize_mode");

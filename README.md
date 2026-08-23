@@ -22,6 +22,8 @@ hard to read and harder to learn.
 - Added **MiniMax H3 Easy Video Black Intro**, which replaces the first user-specified
   number of seconds with black frames while preserving the source FPS, audio, resolution,
   metadata, alpha channel, bit depth, and color space.
+- The media loader now defaults to `0.5` for scale mode and `1024` pixels for long-edge/short-edge modes; image resizing always uses `lanczos`.
+- Added automatic repair for the legacy resize-widget order so older workflows do not pass `lanczos` or `long edge` into the wrong parameter.
 
 ### 2026-08-21
 
