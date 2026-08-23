@@ -20,6 +20,9 @@ from .face_refine_nodes import (
     NODE_CLASS_MAPPINGS as FACE_REFINE_NODE_CLASS_MAPPINGS,
     NODE_DISPLAY_NAME_MAPPINGS as FACE_REFINE_NODE_DISPLAY_NAME_MAPPINGS,
 )
+from .media_routes import register_media_routes
+
+register_media_routes()
 
 NODE_CLASS_MAPPINGS = {
     **FACE_REFINE_NODE_CLASS_MAPPINGS,

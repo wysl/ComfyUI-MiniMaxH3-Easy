@@ -13,6 +13,13 @@ hard to read and harder to learn.
 
 ## Updates
 
+### 2026-08-23
+
+- Improved **MiniMax H3 Easy Media Loader** scaling controls: the resize mode is now the first visible option, and only the active scale, long-edge, or short-edge controls remain visible.
+- Added an `input` directory browser with category-specific media selection and image thumbnails with ordering.
+- Local image, audio, and video files can now be dropped directly onto the active media area and are uploaded into the manifest.
+- Added a dedicated `Concatenated image` output that vertically combines selected images in order while preserving the existing `multi output` image list.
+
 ### 2026-08-21
 
 - Fixed **MiniMax H3 Easy Second Pass Conditioning** for I2V first-frame and first/last-frame workflows: after a latent upscale it now rebuilds both boundary keyframes at the padded H3 patch grid, including odd latent widths or heights.
@@ -85,6 +92,17 @@ delete menu.
 <p align="center">
   <img src="images/quick-create-node-en.png" alt="Quick-create media node" width="460">
 </p>
+
+### MiniMax H3 Easy Media Loader
+
+The media loader keeps images, audio, and video from the `input` directory in separate lists.
+Choose one resize mode first; only the parameters used by that mode remain visible. Existing
+media can be multi-selected from the `input` browser, and local files can be dropped directly
+onto the active category. Images show thumbnails and their selection order.
+
+The `multi output`, `audio output`, and `video output` ports remain independent. When the dedicated
+`Concatenated image` port is connected, selected images are combined vertically in order into one
+`IMAGE`; narrower images receive black right-side padding and the original image list is unchanged.
 
 ### A complete `@` reference editor
 

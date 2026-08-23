@@ -2435,6 +2435,48 @@ def _resize_h3_media_image(
     ).movedim(1, -1)
 
 
+def _concatenate_h3_media_images(images: list[torch.Tensor]) -> torch.Tensor | None:
+    """Stack selected images vertically into one IMAGE while preserving each image.
+
+    Media files can have different dimensions, so the result uses the widest image
+    as the canvas width and pads narrower images with black pixels. Only the first
+    frame of each IMAGE value participates; animated files remain available through
+    the regular list output.
+    """
+    prepared = []
+    for image in images:
+        if not isinstance(image, torch.Tensor) or image.ndim != 4 or image.shape[0] == 0:
+            continue
+        image = image[:1]
+        channels = int(image.shape[-1])
+        if channels >= 3:
+            image = image[..., :3]
+        elif channels == 1:
+            image = image.repeat(1, 1, 1, 3)
+        elif channels == 2:
+            image = torch.cat((image, image[..., :1]), dim=-1)
+        else:
+            continue
+        prepared.append(image.to(dtype=torch.float32))
+
+    if not prepared:
+        return None
+
+    max_width = max(int(image.shape[2]) for image in prepared)
+    total_height = sum(int(image.shape[1]) for image in prepared)
+    canvas = torch.zeros(
+        (1, total_height, max_width, 3),
+        dtype=prepared[0].dtype,
+        device=prepared[0].device,
+    )
+    offset = 0
+    for image in prepared:
+        height, width = int(image.shape[1]), int(image.shape[2])
+        canvas[:, offset : offset + height, :width, :] = image
+        offset += height
+    return canvas
+
+
 def _select_h3_multi_set_outputs(
     input_values: Mapping[str, Any],
     pair_count: int,
@@ -2551,9 +2593,9 @@ class MiniMaxH3EasyAreaSwitch:
 class MiniMaxH3EasyMediaLoader:
     CATEGORY = "MiniMax H3 Easy"
     FUNCTION = "load_media"
-    RETURN_TYPES = ("IMAGE", "AUDIO", "VIDEO")
-    RETURN_NAMES = ("multi output", "audio output", "video output")
-    OUTPUT_IS_LIST = (True, True, True)
+    RETURN_TYPES = ("IMAGE", "AUDIO", "VIDEO", "IMAGE")
+    RETURN_NAMES = ("multi output", "audio output", "video output", "拼接图片")
+    OUTPUT_IS_LIST = (True, True, True, False)
     DESCRIPTION = (
         "Load ordered image, audio, and video lists without mixing media types. "
         "Image resize mode is the only active resize rule: scale mode uses the custom "
@@ -2568,6 +2610,10 @@ class MiniMaxH3EasyMediaLoader:
                     "STRING",
                     {"default": '{"version":1,"images":[],"audios":[],"videos":[]}'},
                 ),
+                "image_resize_mode": (
+                    ["不缩放", "倍率", "长边", "短边"],
+                    {"default": "倍率"},
+                ),
                 "image_scale": (
                     "FLOAT",
                     {"default": 1.0, "min": 0.01, "max": 16.0, "step": 0.01},
@@ -2578,10 +2624,6 @@ class MiniMaxH3EasyMediaLoader:
                 ),
             },
             "optional": {
-                "image_resize_mode": (
-                    ["不缩放", "倍率", "长边", "短边"],
-                    {"default": "倍率"},
-                ),
                 "image_edge_length": (
                     "INT",
                     {"default": 1024, "min": 1, "max": 16384, "step": 8},
@@ -2636,7 +2678,8 @@ class MiniMaxH3EasyMediaLoader:
             InputImpl.VideoFromFile(folder_paths.get_annotated_filepath(name))
             for name in manifest["videos"]
         ]
-        return image_outputs, audio_outputs, video_outputs
+        concatenated = _concatenate_h3_media_images(image_outputs)
+        return image_outputs, audio_outputs, video_outputs, concatenated
 
     @classmethod
     def IS_CHANGED(

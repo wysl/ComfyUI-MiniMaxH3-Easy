@@ -20,6 +20,7 @@ def load_media_loader_symbols():
         "_parse_h3_media_manifest",
         "_validate_h3_media_manifest",
         "_h3_media_target_size",
+        "_concatenate_h3_media_images",
         "MiniMaxH3EasyMediaLoader",
     }
     definitions = [
@@ -32,6 +33,7 @@ def load_media_loader_symbols():
         "Mapping": Mapping,
         "json": json,
         "os": __import__("os"),
+        "torch": __import__("torch"),
         "folder_paths": None,
         "H3_MEDIA_EXTENSIONS": {
             "images": {".png", ".jpg"},
@@ -121,36 +123,49 @@ class MediaLoaderNodeTests(unittest.TestCase):
 
         self.assertEqual(target_size(101, 51, 2.0, "不缩放", 1024, 32), (101, 51))
 
-    def test_outputs_are_three_independent_comfy_lists(self):
+    def test_outputs_keep_media_lists_and_add_concat_image(self):
         node = self.symbols["MiniMaxH3EasyMediaLoader"]
 
-        self.assertEqual(node.RETURN_TYPES, ("IMAGE", "AUDIO", "VIDEO"))
+        self.assertEqual(node.RETURN_TYPES, ("IMAGE", "AUDIO", "VIDEO", "IMAGE"))
         self.assertEqual(
             node.RETURN_NAMES,
-            ("multi output", "audio output", "video output"),
+            ("multi output", "audio output", "video output", "拼接图片"),
         )
-        self.assertEqual(node.OUTPUT_IS_LIST, (True, True, True))
+        self.assertEqual(node.OUTPUT_IS_LIST, (True, True, True, False))
 
     def test_image_scaling_controls_are_built_in(self):
         input_types = self.symbols["MiniMaxH3EasyMediaLoader"].INPUT_TYPES()
         required = input_types["required"]
         optional = input_types["optional"]
 
+        self.assertIn("image_resize_mode", required)
         self.assertIn("image_scale", required)
         self.assertIn("scale_method", required)
-        self.assertIn("image_resize_mode", optional)
         self.assertIn("image_edge_length", optional)
         self.assertIn("image_divisible_by", optional)
         self.assertEqual(required["image_scale"][1]["default"], 1.0)
         self.assertEqual(required["image_scale"][1]["step"], 0.01)
         self.assertIn("lanczos", required["scale_method"][0])
-        self.assertEqual(optional["image_resize_mode"][0], ["不缩放", "倍率", "长边", "短边"])
+        self.assertEqual(required["image_resize_mode"][0], ["不缩放", "倍率", "长边", "短边"])
         self.assertEqual(optional["image_edge_length"][1]["default"], 1024)
         self.assertEqual(optional["image_divisible_by"][1]["default"], 1)
         self.assertEqual(
-            list(required)[:3],
-            ["media_manifest", "image_scale", "scale_method"],
+            list(required)[:2],
+            ["media_manifest", "image_resize_mode"],
         )
+
+    def test_concatenated_image_output_preserves_order_and_pads_width(self):
+        concatenate = self.symbols["_concatenate_h3_media_images"]
+        torch = self.symbols["torch"]
+        first = torch.full((1, 2, 3, 3), 0.25)
+        second = torch.full((1, 1, 2, 3), 0.75)
+
+        result = concatenate([first, second])
+
+        self.assertEqual(tuple(result.shape), (1, 3, 3, 3))
+        self.assertTrue(torch.allclose(result[:, :2, :, :], first))
+        self.assertTrue(torch.allclose(result[:, 2:, :2, :], second))
+        self.assertTrue(torch.all(result[:, 2:, 2:, :] == 0))
 
     def test_frontend_labels_edge_resize_controls(self):
         self.assertIn('widgetByName(node, "image_resize_mode")', self.web_source)
@@ -170,12 +185,20 @@ class MediaLoaderNodeTests(unittest.TestCase):
         self.assertIn('element.addEventListener("dragstart"', self.web_source)
         self.assertIn("node.resizable = true;", self.web_source)
         self.assertIn("getMinHeight: () => 200", self.web_source)
+        self.assertIn("setResizeWidgetVisibility", self.web_source)
+        self.assertIn('widget.type = visible ? widget.__h3MediaLoaderOriginalType : "hidden";', self.web_source)
 
     def test_frontend_uses_separate_upload_tabs_and_server_paths(self):
         self.assertIn('activeKind: "images"', self.web_source)
         self.assertIn('form.append("subfolder", `minimax_h3_easy/media_loader/${kind}`);', self.web_source)
         self.assertIn('api.fetchApi("/upload/image"', self.web_source)
         self.assertNotIn("URL.createObjectURL", self.web_source)
+
+    def test_frontend_supports_input_browser_and_file_drop(self):
+        self.assertIn("/minimax_h3_easy/input-media?kind=", self.web_source)
+        self.assertIn("h3-media-input-picker", self.web_source)
+        self.assertIn("event.dataTransfer.files", self.web_source)
+        self.assertIn("addLocalFiles(event.dataTransfer.files", self.web_source)
 
     def test_configure_does_not_resize_the_node(self):
         start = self.web_source.index(
