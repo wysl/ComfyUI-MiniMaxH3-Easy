@@ -207,7 +207,13 @@ class MediaLoaderNodeTests(unittest.TestCase):
 
     def test_frontend_supports_input_browser_and_file_drop(self):
         self.assertIn("/minimax_h3_easy/input-media?kind=", self.web_source)
+        self.assertIn("/minimax_h3_easy/input-preview?", self.web_source)
         self.assertIn("h3-media-input-picker", self.web_source)
+        self.assertIn("const INPUT_PICKER_PAGE_SIZE = 48;", self.web_source)
+        self.assertIn("state.inputFiles.slice(pageStart, pageStart + INPUT_PICKER_PAGE_SIZE)", self.web_source)
+        self.assertIn('image.decoding = "async";', self.web_source)
+        self.assertIn('"上一页 input 媒体"', self.web_source)
+        self.assertIn('"下一页 input 媒体"', self.web_source)
         self.assertIn("event.dataTransfer.files", self.web_source)
         self.assertIn("addLocalFiles(event.dataTransfer.files", self.web_source)
 

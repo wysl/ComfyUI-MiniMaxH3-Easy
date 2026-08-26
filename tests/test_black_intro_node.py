@@ -62,7 +62,7 @@ class FakeVideo:
         return self.color_space
 
 
-def load_black_intro_node():
+def load_black_intro_node(legacy_video_api=False):
     source_path = PROJECT_ROOT / "nodes.py"
     tree = ast.parse(source_path.read_text(encoding="utf-8"))
     definitions = [
@@ -72,11 +72,17 @@ def load_black_intro_node():
     ]
     module = ast.fix_missing_locations(ast.Module(body=definitions, type_ignores=[]))
 
-    class VideoFromComponents:
-        def __init__(self, components, bit_depth=8, color_space="sRGB"):
-            self.components = components
-            self.bit_depth = bit_depth
-            self.color_space = color_space
+    if legacy_video_api:
+        class VideoFromComponents:
+            def __init__(self, components, bit_depth=8):
+                self.components = components
+                self.bit_depth = bit_depth
+    else:
+        class VideoFromComponents:
+            def __init__(self, components, bit_depth=8, color_space="sRGB"):
+                self.components = components
+                self.bit_depth = bit_depth
+                self.color_space = color_space
 
     namespace = {
         "math": __import__("math"),
@@ -120,6 +126,13 @@ class BlackIntroNodeTests(unittest.TestCase):
         video = FakeVideo(VideoComponents(FakeFrames(range(3)), Fraction(24)))
         output, = self.node.blacken(video, seconds=0)
         self.assertIs(output, video)
+
+    def test_falls_back_for_older_video_api_without_color_space(self):
+        node = load_black_intro_node(legacy_video_api=True)
+        video = FakeVideo(VideoComponents(FakeFrames(range(4)), Fraction(24)))
+        output, = node.blacken(video, seconds=0.01)
+        self.assertEqual(output.components.images.values[0], 0)
+        self.assertEqual(output.bit_depth, 10)
 
 
 if __name__ == "__main__":

@@ -19,6 +19,15 @@ hard to read and harder to learn.
 - Added an `input` directory browser with category-specific media selection and image thumbnails with ordering.
 - Local image, audio, and video files can now be dropped directly onto the active media area and are uploaded into the manifest.
 - Added a dedicated `Concatenated image` output that vertically combines selected images in order while preserving the existing `multi output` image list.
+
+### 2026-08-26
+
+- The **MiniMax H3 Easy Media Loader** input browser now paginates large image folders,
+  rendering at most 48 cards at a time while keeping selections across pages.
+- Image cards use a lightweight 256px server thumbnail and asynchronous browser decoding,
+  avoiding full-resolution image downloads and browser stalls when the input folder is large.
+- **MiniMax H3 Easy Video Black Intro** now falls back automatically on older ComfyUI VIDEO
+  APIs that do not accept the optional `color_space` constructor argument.
 - Added **MiniMax H3 Easy Video Black Intro**, which replaces the first user-specified
   number of seconds with black frames while preserving the source FPS, audio, resolution,
   metadata, alpha channel, bit depth, and color space.

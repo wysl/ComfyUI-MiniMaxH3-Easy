@@ -2854,21 +2854,24 @@ class MiniMaxH3EasyBlackIntro:
 
         black_frames = torch.zeros_like(frames[:black_count])
         output_frames = torch.cat((black_frames, frames[black_count:]), dim=0)
-        output_video = InputImpl.VideoFromComponents(
-            Types.VideoComponents(
-                images=output_frames,
-                audio=components.audio,
-                frame_rate=components.frame_rate,
-                metadata=getattr(components, "metadata", None),
-                alpha=getattr(components, "alpha", None),
-            ),
-            bit_depth=video.get_bit_depth(),
-            color_space=(
-                video.get_color_space()
-                if hasattr(video, "get_color_space")
-                else "sRGB"
-            ),
+        output_components = Types.VideoComponents(
+            images=output_frames,
+            audio=components.audio,
+            frame_rate=components.frame_rate,
+            metadata=getattr(components, "metadata", None),
+            alpha=getattr(components, "alpha", None),
         )
+        video_kwargs = {"bit_depth": video.get_bit_depth()}
+        if hasattr(video, "get_color_space"):
+            video_kwargs["color_space"] = video.get_color_space()
+        try:
+            output_video = InputImpl.VideoFromComponents(output_components, **video_kwargs)
+        except TypeError as error:
+            # Older ComfyUI VIDEO APIs do not expose color_space yet.
+            if "color_space" not in str(error):
+                raise
+            video_kwargs.pop("color_space", None)
+            output_video = InputImpl.VideoFromComponents(output_components, **video_kwargs)
         return (output_video,)
 
 

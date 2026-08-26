@@ -7,6 +7,7 @@ const EMPTY_MANIFEST = { version: 1, images: [], audios: [], videos: [] };
 const DEFAULT_SCALE = 0.5;
 const DEFAULT_EDGE_LENGTH = 1024;
 const FIXED_SCALE_METHOD = "lanczos";
+const INPUT_PICKER_PAGE_SIZE = 48;
 const SCALE_METHODS = new Set(["lanczos", "bicubic", "bilinear", "area", "nearest-exact"]);
 const RESIZE_MODES = new Set(["不缩放", "原图", "倍率", "长边", "短边", "none", "original", "disabled", "long edge", "long_edge", "short edge", "short_edge"]);
 const KIND_CONFIG = {
@@ -118,13 +119,8 @@ function displayName(path) {
 
 function imagePreviewUrl(path) {
     const normalized = String(path || "").replaceAll("\\", "/").replace(/^\/+/, "");
-    const slash = normalized.lastIndexOf("/");
-    const params = new URLSearchParams({
-        filename: slash >= 0 ? normalized.slice(slash + 1) : normalized,
-        subfolder: slash >= 0 ? normalized.slice(0, slash) : "",
-        type: "input",
-    });
-    return api.apiURL(`/view?${params.toString()}`);
+    const params = new URLSearchParams({ filename: normalized });
+    return api.apiURL(`/minimax_h3_easy/input-preview?${params.toString()}`);
 }
 
 function iconForKind(kind) {
@@ -335,6 +331,7 @@ function setupMediaLoader(node) {
         drag: null,
         inputPickerOpen: false,
         inputFiles: [],
+        inputPage: 0,
         inputSelection: new Set(),
     };
 
@@ -435,6 +432,31 @@ function setupMediaLoader(node) {
         title.textContent = `input 目录 · ${KIND_CONFIG[state.activeKind].label}`;
         const actions = document.createElement("div");
         actions.className = "h3-media-input-picker-actions";
+        const pageCount = Math.max(1, Math.ceil(state.inputFiles.length / INPUT_PICKER_PAGE_SIZE));
+        state.inputPage = Math.min(Math.max(0, state.inputPage), pageCount - 1);
+        const pageLabel = document.createElement("span");
+        pageLabel.className = "h3-media-input-page";
+        pageLabel.textContent = `${state.inputPage + 1}/${pageCount}`;
+        const previousPageButton = createIconButton(
+            "‹",
+            "上一页 input 媒体",
+            "h3-media-input-page-previous",
+        );
+        previousPageButton.disabled = state.inputPage === 0;
+        previousPageButton.addEventListener("click", () => {
+            state.inputPage -= 1;
+            render();
+        });
+        const nextPageButton = createIconButton(
+            "›",
+            "下一页 input 媒体",
+            "h3-media-input-page-next",
+        );
+        nextPageButton.disabled = state.inputPage >= pageCount - 1;
+        nextPageButton.addEventListener("click", () => {
+            state.inputPage += 1;
+            render();
+        });
         const addSelectedButton = createIconButton(
             "✓",
             "加入选中的 input 媒体",
@@ -449,7 +471,7 @@ function setupMediaLoader(node) {
             state.inputSelection.clear();
             render();
         });
-        actions.append(addSelectedButton, closeButton);
+        actions.append(previousPageButton, pageLabel, nextPageButton, addSelectedButton, closeButton);
         header.append(title, actions);
         picker.append(header);
 
@@ -462,10 +484,12 @@ function setupMediaLoader(node) {
             return;
         }
 
+        const pageStart = state.inputPage * INPUT_PICKER_PAGE_SIZE;
+        const pageItems = state.inputFiles.slice(pageStart, pageStart + INPUT_PICKER_PAGE_SIZE);
         if (state.activeKind === "images") {
             const grid = document.createElement("div");
             grid.className = "h3-media-input-grid";
-            state.inputFiles.forEach((path) => {
+            pageItems.forEach((path) => {
                 const item = document.createElement("button");
                 item.type = "button";
                 item.className = "h3-media-input-item";
@@ -474,6 +498,7 @@ function setupMediaLoader(node) {
                 item.addEventListener("click", () => toggleInputSelection(path));
                 const image = document.createElement("img");
                 image.loading = "lazy";
+                image.decoding = "async";
                 image.src = imagePreviewUrl(path);
                 image.alt = displayName(path);
                 const caption = document.createElement("span");
@@ -485,7 +510,7 @@ function setupMediaLoader(node) {
         } else {
             const list = document.createElement("div");
             list.className = "h3-media-input-file-list";
-            state.inputFiles.forEach((path) => {
+            pageItems.forEach((path) => {
                 const item = document.createElement("label");
                 item.className = "h3-media-input-file-item";
                 const checkbox = document.createElement("input");
@@ -653,6 +678,7 @@ function setupMediaLoader(node) {
         if (state.uploading) return;
         state.inputPickerOpen = true;
         state.inputFiles = [];
+        state.inputPage = 0;
         state.inputSelection.clear();
         setStatus(`正在读取 input/${KIND_CONFIG[state.activeKind].label}`);
         render();
@@ -663,6 +689,7 @@ function setupMediaLoader(node) {
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const payload = await response.json();
             state.inputFiles = Array.isArray(payload?.files) ? payload.files : [];
+            state.inputPage = 0;
             setStatus(`找到 ${state.inputFiles.length} 项 input 媒体`);
         } catch (error) {
             state.inputFiles = [];
@@ -753,6 +780,7 @@ function installStyles() {
         .h3-media-input-picker-header { display:flex; align-items:center; justify-content:space-between; gap:6px; min-width:0; font-weight:600; }
         .h3-media-input-picker-header > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .h3-media-input-picker-actions { display:flex; flex:0 0 auto; gap:4px; }
+        .h3-media-input-page { min-width:34px; align-self:center; text-align:center; font-variant-numeric:tabular-nums; opacity:.75; }
         .h3-media-input-empty { min-height:40px; display:flex; align-items:center; justify-content:center; opacity:.6; }
         .h3-media-input-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(72px,1fr)); gap:6px; }
         .h3-media-input-item { position:relative; display:grid; grid-template-rows:58px 18px; min-width:0; padding:2px; border:1px solid var(--border-color, #555); border-radius:5px; background:var(--comfy-menu-bg, #2b2b2b); color:inherit; cursor:pointer; overflow:hidden; }
