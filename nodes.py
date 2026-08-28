@@ -1121,6 +1121,41 @@ class MiniMaxH3EasyAspectRatio:
             raise ValueError(f"Unsupported MiniMax H3 aspect ratio: {h3_context.aspect_ratio}") from exc
 
 
+class MiniMaxH3EasySwapDimensions:
+    """Pass width and height through, optionally swapping their output order."""
+
+    CATEGORY = "MiniMax H3 Easy"
+    FUNCTION = "swap"
+    RETURN_TYPES = ("INT", "INT")
+    RETURN_NAMES = ("width", "height")
+    DESCRIPTION = "Pass connected width and height values through, or exchange them when enabled."
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "width": ("INT", {"default": 1024, "min": 1, "max": nodes.MAX_RESOLUTION, "step": 1}),
+                "height": ("INT", {"default": 1024, "min": 1, "max": nodes.MAX_RESOLUTION, "step": 1}),
+                "swap_dimensions": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "label_on": "交换长宽",
+                        "label_off": "保持原顺序",
+                    },
+                ),
+            },
+        }
+
+    @staticmethod
+    def swap(width, height, swap_dimensions=False):
+        width = int(width)
+        height = int(height)
+        if bool(swap_dimensions):
+            return height, width
+        return width, height
+
+
 class MiniMaxH3EasySecondPassConditioning:
     """Synchronize first/last-frame conditioning with a resized video latent."""
 

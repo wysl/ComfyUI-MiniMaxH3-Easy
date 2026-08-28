@@ -28,6 +28,12 @@ hard to read and harder to learn.
   avoiding full-resolution image downloads and browser stalls when the input folder is large.
 - **MiniMax H3 Easy Video Black Intro** now falls back automatically on older ComfyUI VIDEO
   APIs that do not accept the optional `color_space` constructor argument.
+
+### 2026-08-28
+
+- Added **MiniMax H3 Easy Swap Dimensions**, which passes connected `width` and `height`
+  values through and optionally exchanges them with the `交换长宽` switch. Its outputs
+  keep the standard `width`/`height` names for direct connection to resize nodes.
 - Added **MiniMax H3 Easy Video Black Intro**, which replaces the first user-specified
   number of seconds with black frames while preserving the source FPS, audio, resolution,
   metadata, alpha channel, bit depth, and color space.
@@ -291,6 +297,14 @@ duration is longer than the video, the complete video becomes black.
 
 Audio is intentionally preserved and is not muted during the black interval. If a silent
 black opening is needed, mute or trim the audio separately in the surrounding workflow.
+
+### MiniMax H3 Easy Swap Dimensions
+
+Connect any integer width and height outputs to this node. With `保持原顺序`, the two
+outputs remain `width` and `height`; enabling `交换长宽` sends the original height to the
+`width` output and the original width to the `height` output. This is useful when a
+workflow needs to rotate the target orientation before `Resize Image v2` without adding
+manual integer fields.
 
 ### MiniMax H3 Easy Second Pass Conditioning
 
