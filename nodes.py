@@ -7,6 +7,8 @@ chain. The browser extension supplies the ordered virtual media inputs.
 
 from __future__ import annotations
 
+import base64
+import io
 import json
 import math
 import os
@@ -122,6 +124,33 @@ REFERENCE_PLACEHOLDER_RE = re.compile(r"__MINIMAX_H3_REF_(\d+)__")
 UNRESOLVED_REFERENCE_RE = re.compile(r"__MINIMAX_H3_UNRESOLVED_REF_[^_]+__")
 MODEL_FILE_EXTENSIONS = {".safetensors", ".gguf"}
 H3_MULTI_SET_MAX_PAIRS = 64
+
+LIGHTROOM_HSL_ZONES = (
+    ("red", 0.0),
+    ("orange", 30.0),
+    ("yellow", 60.0),
+    ("green", 120.0),
+    ("aqua", 180.0),
+    ("blue", 210.0),
+    ("purple", 270.0),
+    ("magenta", 330.0),
+)
+LIGHTROOM_PARAMETER_NAMES = (
+    "temperature",
+    "tint",
+    "exposure",
+    "contrast",
+    "highlights",
+    "shadows",
+    "whites",
+    "blacks",
+    "texture",
+    "clarity",
+    "dehaze",
+    "vibrance",
+    "saturation",
+    *(f"{zone}_{control}" for zone, _center in LIGHTROOM_HSL_ZONES for control in ("hue", "saturation", "lightness")),
+)
 
 
 class _H3AnyType(str):
@@ -2513,6 +2542,160 @@ def _concatenate_h3_media_images(images: list[torch.Tensor]) -> torch.Tensor | N
     return canvas
 
 
+def _lightroom_parameter_values(values: Mapping[str, Any]) -> dict[str, float]:
+    """Normalize the Lightroom controls so image and video paths share one contract."""
+    result = {}
+    for name in LIGHTROOM_PARAMETER_NAMES:
+        try:
+            value = float(values.get(name, 0.0))
+        except (TypeError, ValueError):
+            value = 0.0
+        result[name] = value if math.isfinite(value) else 0.0
+    return result
+
+
+def _lightroom_has_adjustments(values: Mapping[str, Any]) -> bool:
+    return any(abs(float(values.get(name, 0.0))) > 1e-8 for name in LIGHTROOM_PARAMETER_NAMES)
+
+
+def _lightroom_rgb_to_hsl(rgb: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    red, green, blue = rgb.unbind(dim=1)
+    maximum = torch.maximum(torch.maximum(red, green), blue)
+    minimum = torch.minimum(torch.minimum(red, green), blue)
+    delta = maximum - minimum
+    lightness = (maximum + minimum) * 0.5
+    denominator = (1.0 - (2.0 * lightness - 1.0).abs()).clamp_min(1e-6)
+    saturation = torch.where(delta > 1e-6, delta / denominator, torch.zeros_like(delta))
+
+    hue = torch.zeros_like(delta)
+    red_mask = (maximum == red) & (delta > 1e-6)
+    green_mask = (maximum == green) & (delta > 1e-6)
+    blue_mask = (maximum == blue) & (delta > 1e-6)
+    hue = torch.where(red_mask, ((green - blue) / delta.clamp_min(1e-6)).remainder(6.0), hue)
+    hue = torch.where(green_mask, (blue - red) / delta.clamp_min(1e-6) + 2.0, hue)
+    hue = torch.where(blue_mask, (red - green) / delta.clamp_min(1e-6) + 4.0, hue)
+    return hue.remainder(6.0) / 6.0, saturation.clamp(0.0, 1.0), lightness.clamp(0.0, 1.0)
+
+
+def _lightroom_hsl_to_rgb(hue: torch.Tensor, saturation: torch.Tensor, lightness: torch.Tensor) -> torch.Tensor:
+    saturation = saturation.clamp(0.0, 1.0)
+    lightness = lightness.clamp(0.0, 1.0)
+    chroma = (1.0 - (2.0 * lightness - 1.0).abs()) * saturation
+    hue6 = hue.remainder(1.0) * 6.0
+    first = chroma * (1.0 - ((hue6.remainder(2.0)) - 1.0).abs())
+    match = lightness - chroma * 0.5
+    zero = torch.zeros_like(chroma)
+    red = torch.where(hue6 < 1.0, chroma, torch.where(hue6 < 2.0, first, torch.where(hue6 < 4.0, zero, torch.where(hue6 < 5.0, first, chroma))))
+    green = torch.where(hue6 < 1.0, first, torch.where(hue6 < 3.0, chroma, torch.where(hue6 < 4.0, first, zero)))
+    blue = torch.where(hue6 < 2.0, zero, torch.where(hue6 < 3.0, first, torch.where(hue6 < 5.0, chroma, torch.where(hue6 < 6.0, first, zero))))
+    return torch.stack((red + match, green + match, blue + match), dim=1)
+
+
+def _lightroom_adjust_rgb(rgb: torch.Tensor, values: Mapping[str, Any]) -> torch.Tensor:
+    """Apply the dependency-free Lightroom-style controls to an NCHW RGB tensor."""
+    params = _lightroom_parameter_values(values)
+    if not _lightroom_has_adjustments(params):
+        return rgb
+
+    output = rgb.to(dtype=torch.float32).clone()
+    temperature = params["temperature"] / 100.0
+    tint = params["tint"] / 100.0
+    output[:, 0] = output[:, 0] + temperature * 0.16 + tint * 0.04
+    output[:, 1] = output[:, 1] - tint * 0.10
+    output[:, 2] = output[:, 2] - temperature * 0.16 + tint * 0.04
+
+    output = output * (2.0 ** params["exposure"])
+    contrast = max(-100.0, min(100.0, params["contrast"])) / 100.0
+    output = (output - 0.5) * (1.0 + contrast) + 0.5
+
+    luminance = output[:, 0] * 0.2126 + output[:, 1] * 0.7152 + output[:, 2] * 0.0722
+    highlight_weight = ((luminance - 0.45) / 0.55).clamp(0.0, 1.0).pow(1.5)
+    shadow_weight = ((0.55 - luminance) / 0.55).clamp(0.0, 1.0).pow(1.5)
+    output = output + params["highlights"] / 100.0 * highlight_weight.unsqueeze(1) * 0.28
+    output = output + params["shadows"] / 100.0 * shadow_weight.unsqueeze(1) * 0.28
+    output = output + params["whites"] / 100.0 * 0.10
+    output = output + params["blacks"] / 100.0 * 0.10
+
+    if abs(params["texture"]) > 1e-8 or abs(params["clarity"]) > 1e-8:
+        smooth = functional.avg_pool2d(output, kernel_size=3, stride=1, padding=1)
+        detail = output - smooth
+        detail_strength = params["texture"] / 100.0 * 1.25 + params["clarity"] / 100.0 * 0.85
+        output = output + detail * detail_strength
+
+    if abs(params["dehaze"]) > 1e-8:
+        luma_mean = luminance.mean(dim=(1, 2), keepdim=True)
+        dehaze = params["dehaze"] / 100.0
+        output = (output - luma_mean.unsqueeze(1)) * (1.0 + dehaze * 0.35) + luma_mean.unsqueeze(1) + dehaze * 0.04
+
+    hue, saturation, lightness = _lightroom_rgb_to_hsl(output)
+    vibrance = params["vibrance"] / 100.0
+    saturation = saturation + vibrance * (1.0 - saturation) * 0.75
+    saturation = saturation * (1.0 + params["saturation"] / 100.0)
+
+    for zone, center_degrees in LIGHTROOM_HSL_ZONES:
+        center = center_degrees / 360.0
+        distance = (hue - center + 0.5).remainder(1.0) - 0.5
+        weight = (1.0 - distance.abs() / (45.0 / 360.0)).clamp(0.0, 1.0).pow(1.5)
+        hue = hue + weight * params[f"{zone}_hue"] / 100.0 * (25.0 / 360.0)
+        saturation = saturation + weight * params[f"{zone}_saturation"] / 100.0 * 0.50
+        lightness = lightness + weight * params[f"{zone}_lightness"] / 100.0 * 0.25
+
+    return _lightroom_hsl_to_rgb(hue, saturation, lightness).clamp(0.0, 1.0)
+
+
+def _apply_lightroom_to_image(image: torch.Tensor, values: Mapping[str, Any]) -> torch.Tensor:
+    if not isinstance(image, torch.Tensor) or image.ndim != 4:
+        raise TypeError("Lightroom IMAGE input must use ComfyUI's [batch, height, width, channels] layout")
+    channels = int(image.shape[-1])
+    if channels < 3:
+        raise ValueError("Lightroom adjustment requires an RGB IMAGE with at least three channels")
+    if not _lightroom_has_adjustments(values):
+        return image
+    with torch.no_grad():
+        rgb = _lightroom_adjust_rgb(image[..., :3].movedim(-1, 1), values).movedim(1, -1)
+        if channels > 3:
+            rgb = torch.cat((rgb, image[..., 3:]), dim=-1)
+        return rgb.to(dtype=image.dtype)
+
+
+def _lightroom_preview_data(image: torch.Tensor, max_size: int = 256) -> str | None:
+    if not isinstance(image, torch.Tensor) or image.ndim != 4 or image.shape[0] == 0:
+        return None
+    try:
+        from PIL import Image
+
+        frame = image[0, ..., :3].detach().to(device="cpu", dtype=torch.float32).clamp(0.0, 1.0)
+        array = frame.mul(255.0).round().to(dtype=torch.uint8).numpy()
+        preview = Image.fromarray(array, mode="RGB")
+        preview.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+        buffer = io.BytesIO()
+        preview.save(buffer, format="PNG", optimize=True)
+        return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+    except Exception:
+        return None
+
+
+def _lightroom_video_from_components(video: Any, images: torch.Tensor):
+    components = video.get_components()
+    output_components = Types.VideoComponents(
+        images=images,
+        audio=components.audio,
+        frame_rate=components.frame_rate,
+        metadata=getattr(components, "metadata", None),
+        alpha=getattr(components, "alpha", None),
+    )
+    video_kwargs = {"bit_depth": video.get_bit_depth()}
+    if hasattr(video, "get_color_space"):
+        video_kwargs["color_space"] = video.get_color_space()
+    try:
+        return InputImpl.VideoFromComponents(output_components, **video_kwargs)
+    except TypeError as error:
+        if "color_space" not in str(error):
+            raise
+        video_kwargs.pop("color_space", None)
+        return InputImpl.VideoFromComponents(output_components, **video_kwargs)
+
+
 def _select_h3_multi_set_outputs(
     input_values: Mapping[str, Any],
     pair_count: int,
@@ -2910,6 +3093,83 @@ class MiniMaxH3EasyBlackIntro:
         return (output_video,)
 
 
+def _lightroom_input_types(input_name: str) -> dict:
+    controls = {
+        "temperature": ("FLOAT", {"default": 0.0, "min": -100.0, "max": 100.0, "step": 0.01}),
+        "tint": ("FLOAT", {"default": 0.0, "min": -100.0, "max": 100.0, "step": 0.01}),
+        "exposure": ("FLOAT", {"default": 0.0, "min": -5.0, "max": 5.0, "step": 0.01}),
+        "contrast": ("FLOAT", {"default": 0.0, "min": -100.0, "max": 100.0, "step": 0.01}),
+        "highlights": ("FLOAT", {"default": 0.0, "min": -100.0, "max": 100.0, "step": 0.01}),
+        "shadows": ("FLOAT", {"default": 0.0, "min": -100.0, "max": 100.0, "step": 0.01}),
+        "whites": ("FLOAT", {"default": 0.0, "min": -100.0, "max": 100.0, "step": 0.01}),
+        "blacks": ("FLOAT", {"default": 0.0, "min": -100.0, "max": 100.0, "step": 0.01}),
+        "texture": ("FLOAT", {"default": 0.0, "min": -100.0, "max": 100.0, "step": 0.01}),
+        "clarity": ("FLOAT", {"default": 0.0, "min": -100.0, "max": 100.0, "step": 0.01}),
+        "dehaze": ("FLOAT", {"default": 0.0, "min": -100.0, "max": 100.0, "step": 0.01}),
+        "vibrance": ("FLOAT", {"default": 0.0, "min": -100.0, "max": 100.0, "step": 0.01}),
+        "saturation": ("FLOAT", {"default": 0.0, "min": -100.0, "max": 100.0, "step": 0.01}),
+    }
+    for zone, _center in LIGHTROOM_HSL_ZONES:
+        controls[f"{zone}_hue"] = ("FLOAT", {"default": 0.0, "min": -100.0, "max": 100.0, "step": 0.01})
+        controls[f"{zone}_saturation"] = ("FLOAT", {"default": 0.0, "min": -100.0, "max": 100.0, "step": 0.01})
+        controls[f"{zone}_lightness"] = ("FLOAT", {"default": 0.0, "min": -100.0, "max": 100.0, "step": 0.01})
+    input_spec = ("IMAGE",) if input_name == "image" else ("VIDEO",)
+    return {"required": {input_name: input_spec, **controls}}
+
+
+def _lightroom_ui_result(source_images: torch.Tensor, result: Any) -> dict:
+    preview = _lightroom_preview_data(source_images)
+    ui = {"h3_lightroom_preview": [{"data": preview}] if preview else []}
+    return {"ui": ui, "result": (result,)}
+
+
+class MiniMaxH3EasyLightroomImage:
+    CATEGORY = "MiniMax H3 Easy/Color"
+    FUNCTION = "adjust"
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image",)
+    DESCRIPTION = (
+        "Apply Lightroom-style controls after VAE Decode. Every control defaults to zero; "
+        "the original image is returned unchanged when all controls are zero."
+    )
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return _lightroom_input_types("image")
+
+    @staticmethod
+    def adjust(image, **values):
+        params = _lightroom_parameter_values(values)
+        result = _apply_lightroom_to_image(image, params)
+        return _lightroom_ui_result(image, result)
+
+
+class MiniMaxH3EasyLightroomVideo:
+    CATEGORY = "MiniMax H3 Easy/Color"
+    FUNCTION = "adjust"
+    RETURN_TYPES = ("VIDEO",)
+    RETURN_NAMES = ("video",)
+    DESCRIPTION = (
+        "Apply Lightroom-style controls frame by frame after VAE Decode while preserving "
+        "FPS, audio, metadata, alpha, resolution, bit depth, and color space."
+    )
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return _lightroom_input_types("video")
+
+    @staticmethod
+    def adjust(video, **values):
+        components = video.get_components()
+        params = _lightroom_parameter_values(values)
+        if _lightroom_has_adjustments(params):
+            images = _apply_lightroom_to_image(components.images, params)
+            result = _lightroom_video_from_components(video, images)
+        else:
+            result = video
+        return _lightroom_ui_result(components.images, result)
+
+
 def _rife_vfi_node_class():
     node_class = nodes.NODE_CLASS_MAPPINGS.get("RIFE_VFI_Opt")
     if node_class is None:
@@ -2991,6 +3251,8 @@ NODE_CLASS_MAPPINGS = {
     "MiniMaxH3EasySaveVideo": MiniMaxH3EasySaveVideo,
     "MiniMaxH3EasyBlackIntro": MiniMaxH3EasyBlackIntro,
     "MiniMaxH3EasyFrameInterpolation": MiniMaxH3EasyFrameInterpolation,
+    "MiniMaxH3EasyLightroomImage": MiniMaxH3EasyLightroomImage,
+    "MiniMaxH3EasyLightroomVideo": MiniMaxH3EasyLightroomVideo,
     "MiniMaxH3EasyChromaContext": MiniMaxH3EasyChromaContext,
     "MiniMaxH3EasySeamStabilizer": MiniMaxH3EasySeamStabilizer,
     "MiniMaxH3EasyMediaLoader": MiniMaxH3EasyMediaLoader,

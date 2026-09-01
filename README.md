@@ -13,6 +13,14 @@ hard to read and harder to learn.
 
 ## Updates
 
+### 2026-09-01
+
+- Added **MiniMax H3 Easy Lightroom IMAGE** and **MiniMax H3 Easy Lightroom VIDEO** for use after VAE Decode. Every color control defaults to `0`, and a zeroed node returns the original data unchanged.
+- Added temperature, tint, exposure, contrast, highlights, shadows, whites, blacks, texture, clarity, dehaze, vibrance, and saturation controls.
+- Added hue, saturation, and lightness controls for eight HSL zones: red, orange, yellow, green, aqua, blue, purple, and magenta. Video processing is frame-by-frame and preserves FPS, audio, metadata, alpha, resolution, bit depth, and color space.
+- Added a low-resolution first-frame preview. After the node executes once, browser Canvas updates the preview immediately as controls move without rerunning VAE or the whole video.
+- The color controls use the existing PyTorch, ComfyUI VIDEO API, and Pillow stack; no new Python dependency is required.
+
 ### 2026-08-23
 
 - Improved **MiniMax H3 Easy Media Loader** scaling controls: the resize mode is now the first visible option, and only the active scale, long-edge, or short-edge controls remain visible.
