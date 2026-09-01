@@ -1,8 +1,12 @@
 import { app } from "../../../scripts/app.js";
 
-const NODE_TYPES = new Set([
+const PREVIEW_NODE_TYPES = new Set([
     "MiniMaxH3EasyLightroomImage",
     "MiniMaxH3EasyLightroomVideo",
+]);
+
+const NODE_TYPES = new Set([
+    ...PREVIEW_NODE_TYPES,
     "MiniMaxH3EasyLightroomLight",
     "MiniMaxH3EasyLightroomColor",
     "MiniMaxH3EasyLightroomDetail",
@@ -294,22 +298,24 @@ app.registerExtension({
         nodeType.prototype.onNodeCreated = function onNodeCreatedLightroom() {
             const result = originalCreated?.apply(this, arguments);
             localizeNode(this);
-            installPreview(this);
+            if (PREVIEW_NODE_TYPES.has(nodeData.name)) installPreview(this);
             return result;
         };
         const originalConfigure = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function onConfigureLightroom(info) {
             const result = originalConfigure?.apply(this, arguments);
             localizeNode(this);
-            installPreview(this);
+            if (PREVIEW_NODE_TYPES.has(nodeData.name)) installPreview(this);
             return result;
         };
         const originalExecuted = nodeType.prototype.onExecuted;
         nodeType.prototype.onExecuted = function onExecutedLightroom(output) {
             const result = originalExecuted?.apply(this, arguments);
             localizeNode(this);
-            installPreview(this);
-            setSourcePreview(this, output?.h3_lightroom_preview?.[0]?.data);
+            if (PREVIEW_NODE_TYPES.has(nodeData.name)) {
+                installPreview(this);
+                setSourcePreview(this, output?.h3_lightroom_preview?.[0]?.data);
+            }
             return result;
         };
         const originalRemoved = nodeType.prototype.onRemoved;

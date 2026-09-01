@@ -20,6 +20,7 @@
 - 新增低分辨率首帧实时预览：节点执行后缓存预览图，拖动参数时在浏览器 Canvas 中即时更新，不会重复执行 VAE 或整段视频；
 - 将调色控件拆分为可串联的 **Lightroom Light / Color / Detail / HSL Warm / HSL Cool** 五个短节点；五个节点同时支持 IMAGE 和 VIDEO，输入输出为通配媒体类型，旧的完整 IMAGE/VIDEO 节点继续保留以兼容已有工作流；
 - 调色节点内部控件和端口显示为中文，节点标题保留英文，便于在 ComfyUI 搜索和区分处理阶段。
+- 五个分段调色节点不创建预览区域，只负责轻量串联处理；完整 IMAGE/VIDEO 节点仍保留原有首帧预览。
 - 调色功能仅使用现有 PyTorch、ComfyUI VIDEO API 和 Pillow，不新增 Python 依赖。
 
 ### 2026-08-23

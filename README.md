@@ -21,6 +21,7 @@ hard to read and harder to learn.
 - Added a low-resolution first-frame preview. After the node executes once, browser Canvas updates the preview immediately as controls move without rerunning VAE or the whole video.
 - Split the controls into five short, chainable nodes: **Lightroom Light / Color / Detail / HSL Warm / HSL Cool**. Each accepts and returns either IMAGE or VIDEO through ComfyUI's wildcard media type; the original full IMAGE/VIDEO nodes remain available for existing workflows.
 - Stage controls and ports are localized in Chinese while node titles remain in English, making the processing order easy to search and distinguish in ComfyUI.
+- The five stage nodes do not create preview widgets and only perform their lightweight chainable transform; the full IMAGE/VIDEO nodes retain their existing first-frame preview.
 - The color controls use the existing PyTorch, ComfyUI VIDEO API, and Pillow stack; no new Python dependency is required.
 
 ### 2026-08-23

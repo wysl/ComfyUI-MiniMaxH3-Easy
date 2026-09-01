@@ -3213,8 +3213,8 @@ class _MiniMaxH3EasyLightroomStage:
         return _lightroom_stage_input_types(cls.STAGE_KEY)
 
     def adjust(self, media, **values):
-        result, source_images = _apply_lightroom_to_media(media, values)
-        return _lightroom_ui_result(source_images, result)
+        result, _source_images = _apply_lightroom_to_media(media, values)
+        return (result,)
 
 
 class MiniMaxH3EasyLightroomLight(_MiniMaxH3EasyLightroomStage):

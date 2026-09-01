@@ -199,10 +199,16 @@ class LightroomNodeTests(unittest.TestCase):
         self.assertEqual(len(color.INPUT_TYPES()["required"]), 5)
 
         image = torch.full((1, 4, 4, 3), 0.25)
-        first = light().adjust(image, exposure=1.0)["result"][0]
-        second = color().adjust(first, temperature=50.0)["result"][0]
+        first = light().adjust(image, exposure=1.0)[0]
+        second = color().adjust(first, temperature=50.0)[0]
         self.assertEqual(second.shape, image.shape)
         self.assertFalse(torch.allclose(second, image))
+
+    def test_split_stage_nodes_do_not_emit_preview_ui(self):
+        image = torch.full((1, 4, 4, 3), 0.25)
+        result = self.symbols["MiniMaxH3EasyLightroomDetail"]().adjust(image, clarity=10.0)
+        self.assertIsInstance(result, tuple)
+        self.assertEqual(len(result), 1)
 
     def test_hsl_stage_groups_cover_all_eight_zones(self):
         warm = self.symbols["MiniMaxH3EasyLightroomHSLWarm"].INPUT_TYPES()["required"]
