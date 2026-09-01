@@ -18,6 +18,8 @@
 - 支持色温、色调、曝光度、对比度、高光、阴影、白色色阶、黑色色阶、纹理、清晰度、去朦胧、鲜艳度和饱和度；
 - 新增红、橙、黄、绿、青、蓝、紫、洋红八个色区的色相/饱和度/明亮度控制；视频逐帧调色并保留 FPS、音频、元数据、透明通道、分辨率、位深和颜色空间；
 - 新增低分辨率首帧实时预览：节点执行后缓存预览图，拖动参数时在浏览器 Canvas 中即时更新，不会重复执行 VAE 或整段视频；
+- 将调色控件拆分为可串联的 **Lightroom Light / Color / Detail / HSL Warm / HSL Cool** 五个短节点；五个节点同时支持 IMAGE 和 VIDEO，输入输出为通配媒体类型，旧的完整 IMAGE/VIDEO 节点继续保留以兼容已有工作流；
+- 调色节点内部控件和端口显示为中文，节点标题保留英文，便于在 ComfyUI 搜索和区分处理阶段。
 - 调色功能仅使用现有 PyTorch、ComfyUI VIDEO API 和 Pillow，不新增 Python 依赖。
 
 ### 2026-08-23
@@ -195,6 +197,20 @@ FL2VA，参考生视频优先使用 Ref2VA。两种主模型不能同时设置�
 3. 融合节点会自动读取原提示词、生成模式和有序媒体，输出节点再用优化结果重新编码 Conditioning。
 
 不连接 `优化后的提示词` 时，输出节点继续使用主节点原先生成的 Conditioning，旧工作流行为不变。
+
+### Lightroom 分段调色节点
+
+如果完整 Lightroom 节点的控件过多，可改用以下五个短节点串联。它们都应放在 VAE 解码之后，
+输入和输出均兼容 `IMAGE` 与 `VIDEO`，可以按任意顺序连接：
+
+- `MiniMax H3 Easy Lightroom Light`：曝光度、对比度、高光、阴影、白色色阶、黑色色阶；
+- `MiniMax H3 Easy Lightroom Color`：色温、色调、鲜艳度、饱和度；
+- `MiniMax H3 Easy Lightroom Detail`：纹理、清晰度、去朦胧；
+- `MiniMax H3 Easy Lightroom HSL Warm`：红、橙、黄、绿四个色区的色相、饱和度、明亮度；
+- `MiniMax H3 Easy Lightroom HSL Cool`：青、蓝、紫、洋红四个色区的色相、饱和度、明亮度。
+
+五个节点的所有参数默认都是 `0`。例如：`VAE Decode → Light → Color → Detail → HSL Warm → HSL Cool`。
+旧的完整 `Lightroom IMAGE/VIDEO` 节点仍保留，用于兼容已经保存的工作流。
 
 ### MiniMax H3 Easy 功能区路由
 

@@ -3,6 +3,11 @@ import { app } from "../../../scripts/app.js";
 const NODE_TYPES = new Set([
     "MiniMaxH3EasyLightroomImage",
     "MiniMaxH3EasyLightroomVideo",
+    "MiniMaxH3EasyLightroomLight",
+    "MiniMaxH3EasyLightroomColor",
+    "MiniMaxH3EasyLightroomDetail",
+    "MiniMaxH3EasyLightroomHSLWarm",
+    "MiniMaxH3EasyLightroomHSLCool",
 ]);
 
 const HSL_ZONES = [
@@ -16,14 +21,74 @@ const CONTROL_NAMES = [
     ...HSL_ZONES.flatMap(([zone]) => [`${zone}_hue`, `${zone}_saturation`, `${zone}_lightness`]),
 ];
 
+const STAGE_CONTROLS = {
+    MiniMaxH3EasyLightroomLight: ["exposure", "contrast", "highlights", "shadows", "whites", "blacks"],
+    MiniMaxH3EasyLightroomColor: ["temperature", "tint", "vibrance", "saturation"],
+    MiniMaxH3EasyLightroomDetail: ["texture", "clarity", "dehaze"],
+    MiniMaxH3EasyLightroomHSLWarm: CONTROL_NAMES.filter((name) => /^(red|orange|yellow|green)_/.test(name)),
+    MiniMaxH3EasyLightroomHSLCool: CONTROL_NAMES.filter((name) => /^(aqua|blue|purple|magenta)_/.test(name)),
+};
+
+const CONTROL_LABELS = {
+    temperature: "色温", tint: "色调", exposure: "曝光度", contrast: "对比度",
+    highlights: "高光", shadows: "阴影", whites: "白色色阶", blacks: "黑色色阶",
+    texture: "纹理", clarity: "清晰度", dehaze: "去朦胧", vibrance: "鲜艳度", saturation: "饱和度",
+    red: "红色", orange: "橙色", yellow: "黄色", green: "绿色",
+    aqua: "青色", blue: "蓝色", purple: "紫色", magenta: "洋红色",
+};
+
+const HSL_CONTROL_LABELS = { hue: "色相", saturation: "饱和度", lightness: "明亮度" };
+
 function widget(node, name) {
     return (node.widgets || []).find((item) => item.name === name);
 }
 
 function valuesFor(node) {
     const values = {};
-    for (const name of CONTROL_NAMES) values[name] = Number(widget(node, name)?.value || 0);
+    const names = STAGE_CONTROLS[node?.comfyClass || node?.type] || CONTROL_NAMES;
+    for (const name of names) values[name] = Number(widget(node, name)?.value || 0);
     return values;
+}
+
+function controlsFor(node) {
+    return STAGE_CONTROLS[node?.comfyClass || node?.type] || CONTROL_NAMES;
+}
+
+function localizeNode(node) {
+    if (!node) return;
+    for (const item of node.widgets || []) {
+        const match = item.name.match(/^([a-z]+)_(hue|saturation|lightness)$/);
+        if (match) {
+            item.label = `${CONTROL_LABELS[match[1]] || match[1]}${HSL_CONTROL_LABELS[match[2]]}`;
+        } else if (CONTROL_LABELS[item.name]) {
+            item.label = CONTROL_LABELS[item.name];
+        }
+    }
+    for (const input of node.inputs || []) {
+        if (input.name === "media") {
+            input.label = "图像或视频";
+            input.localized_name = "图像或视频";
+        } else if (input.name === "image") {
+            input.label = "图像";
+            input.localized_name = "图像";
+        } else if (input.name === "video") {
+            input.label = "视频";
+            input.localized_name = "视频";
+        }
+    }
+    for (const output of node.outputs || []) {
+        const outputName = String(output.name || "").toLowerCase();
+        if (outputName === "图像或视频") {
+            output.label = "图像或视频";
+            output.localized_name = "图像或视频";
+        } else if (outputName === "image") {
+            output.label = "图像";
+            output.localized_name = "图像";
+        } else if (outputName === "video") {
+            output.label = "视频";
+            output.localized_name = "视频";
+        }
+    }
 }
 
 function rgbToHsl(red, green, blue) {
@@ -194,7 +259,8 @@ function installPreview(node) {
         node.__h3LightroomWidget = domWidget;
         node.__h3LightroomCanvas = canvas;
     }
-    for (const name of CONTROL_NAMES) {
+    localizeNode(node);
+    for (const name of controlsFor(node)) {
         const control = widget(node, name);
         if (!control || control.__h3LightroomCallback) continue;
         const original = control.callback;
@@ -227,18 +293,21 @@ app.registerExtension({
         const originalCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function onNodeCreatedLightroom() {
             const result = originalCreated?.apply(this, arguments);
+            localizeNode(this);
             installPreview(this);
             return result;
         };
         const originalConfigure = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function onConfigureLightroom(info) {
             const result = originalConfigure?.apply(this, arguments);
+            localizeNode(this);
             installPreview(this);
             return result;
         };
         const originalExecuted = nodeType.prototype.onExecuted;
         nodeType.prototype.onExecuted = function onExecutedLightroom(output) {
             const result = originalExecuted?.apply(this, arguments);
+            localizeNode(this);
             installPreview(this);
             setSourcePreview(this, output?.h3_lightroom_preview?.[0]?.data);
             return result;

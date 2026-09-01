@@ -19,6 +19,8 @@ hard to read and harder to learn.
 - Added temperature, tint, exposure, contrast, highlights, shadows, whites, blacks, texture, clarity, dehaze, vibrance, and saturation controls.
 - Added hue, saturation, and lightness controls for eight HSL zones: red, orange, yellow, green, aqua, blue, purple, and magenta. Video processing is frame-by-frame and preserves FPS, audio, metadata, alpha, resolution, bit depth, and color space.
 - Added a low-resolution first-frame preview. After the node executes once, browser Canvas updates the preview immediately as controls move without rerunning VAE or the whole video.
+- Split the controls into five short, chainable nodes: **Lightroom Light / Color / Detail / HSL Warm / HSL Cool**. Each accepts and returns either IMAGE or VIDEO through ComfyUI's wildcard media type; the original full IMAGE/VIDEO nodes remain available for existing workflows.
+- Stage controls and ports are localized in Chinese while node titles remain in English, making the processing order easy to search and distinguish in ComfyUI.
 - The color controls use the existing PyTorch, ComfyUI VIDEO API, and Pillow stack; no new Python dependency is required.
 
 ### 2026-08-23
@@ -236,6 +238,22 @@ Assistant integration, connect the workflow as follows:
 
 When `Optimized prompt` is not connected, the original Conditioning is used
 unchanged, preserving existing workflows.
+
+### Lightroom stage nodes
+
+For a shorter panel, use the five chainable stages below after VAE Decode. Each
+stage accepts and returns either `IMAGE` or `VIDEO`, so they can be connected in
+any order:
+
+- `MiniMax H3 Easy Lightroom Light`: exposure, contrast, highlights, shadows, whites, and blacks;
+- `MiniMax H3 Easy Lightroom Color`: temperature, tint, vibrance, and saturation;
+- `MiniMax H3 Easy Lightroom Detail`: texture, clarity, and dehaze;
+- `MiniMax H3 Easy Lightroom HSL Warm`: hue, saturation, and lightness for red, orange, yellow, and green;
+- `MiniMax H3 Easy Lightroom HSL Cool`: hue, saturation, and lightness for aqua, blue, purple, and magenta.
+
+All stage controls default to `0`. A typical chain is
+`VAE Decode -> Light -> Color -> Detail -> HSL Warm -> HSL Cool`.
+The original full `Lightroom IMAGE/VIDEO` nodes remain available for workflow compatibility.
 
 ### MiniMax H3 Easy Distant Face Refine
 

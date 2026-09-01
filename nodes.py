@@ -151,6 +151,21 @@ LIGHTROOM_PARAMETER_NAMES = (
     "saturation",
     *(f"{zone}_{control}" for zone, _center in LIGHTROOM_HSL_ZONES for control in ("hue", "saturation", "lightness")),
 )
+LIGHTROOM_STAGE_PARAMETER_NAMES = {
+    "light": ("exposure", "contrast", "highlights", "shadows", "whites", "blacks"),
+    "color": ("temperature", "tint", "vibrance", "saturation"),
+    "detail": ("texture", "clarity", "dehaze"),
+    "hsl_warm": tuple(
+        f"{zone}_{control}"
+        for zone, _center in LIGHTROOM_HSL_ZONES[:4]
+        for control in ("hue", "saturation", "lightness")
+    ),
+    "hsl_cool": tuple(
+        f"{zone}_{control}"
+        for zone, _center in LIGHTROOM_HSL_ZONES[4:]
+        for control in ("hue", "saturation", "lightness")
+    ),
+}
 
 
 class _H3AnyType(str):
@@ -2696,6 +2711,20 @@ def _lightroom_video_from_components(video: Any, images: torch.Tensor):
         return InputImpl.VideoFromComponents(output_components, **video_kwargs)
 
 
+def _apply_lightroom_to_media(media: Any, values: Mapping[str, Any]):
+    """Apply one Lightroom stage to either an IMAGE tensor or a VIDEO object."""
+    params = _lightroom_parameter_values(values)
+    if isinstance(media, torch.Tensor):
+        return _apply_lightroom_to_image(media, params), media
+    if hasattr(media, "get_components"):
+        components = media.get_components()
+        if _lightroom_has_adjustments(params):
+            images = _apply_lightroom_to_image(components.images, params)
+            return _lightroom_video_from_components(media, images), components.images
+        return media, components.images
+    raise TypeError("Lightroom stages accept an IMAGE tensor or a VIDEO value")
+
+
 def _select_h3_multi_set_outputs(
     input_values: Mapping[str, Any],
     pair_count: int,
@@ -3128,10 +3157,7 @@ class MiniMaxH3EasyLightroomImage:
     FUNCTION = "adjust"
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("image",)
-    DESCRIPTION = (
-        "Apply Lightroom-style controls after VAE Decode. Every control defaults to zero; "
-        "the original image is returned unchanged when all controls are zero."
-    )
+    DESCRIPTION = "VAE 解码后应用完整 Lightroom 调色；所有控件默认 0，全部为 0 时保持原图。"
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -3149,10 +3175,7 @@ class MiniMaxH3EasyLightroomVideo:
     FUNCTION = "adjust"
     RETURN_TYPES = ("VIDEO",)
     RETURN_NAMES = ("video",)
-    DESCRIPTION = (
-        "Apply Lightroom-style controls frame by frame after VAE Decode while preserving "
-        "FPS, audio, metadata, alpha, resolution, bit depth, and color space."
-    )
+    DESCRIPTION = "VAE 解码后逐帧应用完整 Lightroom 调色，并保留 FPS、音频、元数据、透明通道、分辨率、位深和颜色空间。"
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -3168,6 +3191,55 @@ class MiniMaxH3EasyLightroomVideo:
         else:
             result = video
         return _lightroom_ui_result(components.images, result)
+
+
+def _lightroom_stage_input_types(stage: str) -> dict:
+    all_controls = _lightroom_input_types("image")["required"]
+    controls = {
+        name: all_controls[name]
+        for name in LIGHTROOM_STAGE_PARAMETER_NAMES[stage]
+    }
+    return {"required": {"media": (H3_ANY_TYPE,), **controls}}
+
+
+class _MiniMaxH3EasyLightroomStage:
+    CATEGORY = "MiniMax H3 Easy/Color"
+    FUNCTION = "adjust"
+    RETURN_TYPES = (H3_ANY_TYPE,)
+    RETURN_NAMES = ("图像或视频",)
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return _lightroom_stage_input_types(cls.STAGE_KEY)
+
+    def adjust(self, media, **values):
+        result, source_images = _apply_lightroom_to_media(media, values)
+        return _lightroom_ui_result(source_images, result)
+
+
+class MiniMaxH3EasyLightroomLight(_MiniMaxH3EasyLightroomStage):
+    STAGE_KEY = "light"
+    DESCRIPTION = "基础明暗调节，可与其他 Lightroom 阶段串联。"
+
+
+class MiniMaxH3EasyLightroomColor(_MiniMaxH3EasyLightroomStage):
+    STAGE_KEY = "color"
+    DESCRIPTION = "色温、色调、鲜艳度和饱和度调节，可与其他 Lightroom 阶段串联。"
+
+
+class MiniMaxH3EasyLightroomDetail(_MiniMaxH3EasyLightroomStage):
+    STAGE_KEY = "detail"
+    DESCRIPTION = "纹理、清晰度和去朦胧调节，可与其他 Lightroom 阶段串联。"
+
+
+class MiniMaxH3EasyLightroomHSLWarm(_MiniMaxH3EasyLightroomStage):
+    STAGE_KEY = "hsl_warm"
+    DESCRIPTION = "红、橙、黄、绿四个色区的 HSL 混色器，可与其他 Lightroom 阶段串联。"
+
+
+class MiniMaxH3EasyLightroomHSLCool(_MiniMaxH3EasyLightroomStage):
+    STAGE_KEY = "hsl_cool"
+    DESCRIPTION = "青、蓝、紫、洋红四个色区的 HSL 混色器，可与其他 Lightroom 阶段串联。"
 
 
 def _rife_vfi_node_class():
@@ -3253,6 +3325,11 @@ NODE_CLASS_MAPPINGS = {
     "MiniMaxH3EasyFrameInterpolation": MiniMaxH3EasyFrameInterpolation,
     "MiniMaxH3EasyLightroomImage": MiniMaxH3EasyLightroomImage,
     "MiniMaxH3EasyLightroomVideo": MiniMaxH3EasyLightroomVideo,
+    "MiniMaxH3EasyLightroomLight": MiniMaxH3EasyLightroomLight,
+    "MiniMaxH3EasyLightroomColor": MiniMaxH3EasyLightroomColor,
+    "MiniMaxH3EasyLightroomDetail": MiniMaxH3EasyLightroomDetail,
+    "MiniMaxH3EasyLightroomHSLWarm": MiniMaxH3EasyLightroomHSLWarm,
+    "MiniMaxH3EasyLightroomHSLCool": MiniMaxH3EasyLightroomHSLCool,
     "MiniMaxH3EasyChromaContext": MiniMaxH3EasyChromaContext,
     "MiniMaxH3EasySeamStabilizer": MiniMaxH3EasySeamStabilizer,
     "MiniMaxH3EasyMediaLoader": MiniMaxH3EasyMediaLoader,

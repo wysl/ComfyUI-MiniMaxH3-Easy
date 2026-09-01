@@ -25,10 +25,18 @@ def load_lightroom_symbols(legacy_video_api=False):
         "_apply_lightroom_to_image",
         "_lightroom_preview_data",
         "_lightroom_video_from_components",
+        "_apply_lightroom_to_media",
         "_lightroom_input_types",
+        "_lightroom_stage_input_types",
         "_lightroom_ui_result",
         "MiniMaxH3EasyLightroomImage",
         "MiniMaxH3EasyLightroomVideo",
+        "_MiniMaxH3EasyLightroomStage",
+        "MiniMaxH3EasyLightroomLight",
+        "MiniMaxH3EasyLightroomColor",
+        "MiniMaxH3EasyLightroomDetail",
+        "MiniMaxH3EasyLightroomHSLWarm",
+        "MiniMaxH3EasyLightroomHSLCool",
     }
     definitions = [
         node
@@ -96,6 +104,22 @@ def load_lightroom_symbols(legacy_video_api=False):
                 ("aqua", 180.0), ("blue", 210.0), ("purple", 270.0), ("magenta", 330.0),
             ) for control in ("hue", "saturation", "lightness")),
         ),
+        "LIGHTROOM_STAGE_PARAMETER_NAMES": {
+            "light": ("exposure", "contrast", "highlights", "shadows", "whites", "blacks"),
+            "color": ("temperature", "tint", "vibrance", "saturation"),
+            "detail": ("texture", "clarity", "dehaze"),
+            "hsl_warm": tuple(
+                f"{zone}_{control}"
+                for zone in ("red", "orange", "yellow", "green")
+                for control in ("hue", "saturation", "lightness")
+            ),
+            "hsl_cool": tuple(
+                f"{zone}_{control}"
+                for zone in ("aqua", "blue", "purple", "magenta")
+                for control in ("hue", "saturation", "lightness")
+            ),
+        },
+        "H3_ANY_TYPE": "*",
         "InputImpl": SimpleNamespace(VideoFromComponents=VideoFromComponents),
         "Types": SimpleNamespace(VideoComponents=VideoComponents),
     }
@@ -166,13 +190,43 @@ class LightroomNodeTests(unittest.TestCase):
         self.assertEqual(result["result"][0].components.images.shape, source.shape)
         self.assertEqual(result["result"][0].bit_depth, 10)
 
+    def test_split_stage_nodes_are_short_and_chainable_for_images(self):
+        light = self.symbols["MiniMaxH3EasyLightroomLight"]
+        color = self.symbols["MiniMaxH3EasyLightroomColor"]
+        self.assertEqual(light.RETURN_TYPES, ("*",))
+        self.assertEqual(light.INPUT_TYPES()["required"]["media"], ("*",))
+        self.assertEqual(len(light.INPUT_TYPES()["required"]), 7)
+        self.assertEqual(len(color.INPUT_TYPES()["required"]), 5)
+
+        image = torch.full((1, 4, 4, 3), 0.25)
+        first = light().adjust(image, exposure=1.0)["result"][0]
+        second = color().adjust(first, temperature=50.0)["result"][0]
+        self.assertEqual(second.shape, image.shape)
+        self.assertFalse(torch.allclose(second, image))
+
+    def test_hsl_stage_groups_cover_all_eight_zones(self):
+        warm = self.symbols["MiniMaxH3EasyLightroomHSLWarm"].INPUT_TYPES()["required"]
+        cool = self.symbols["MiniMaxH3EasyLightroomHSLCool"].INPUT_TYPES()["required"]
+        warm_names = set(warm) - {"media"}
+        cool_names = set(cool) - {"media"}
+        self.assertEqual(len(warm_names), 12)
+        self.assertEqual(len(cool_names), 12)
+        self.assertEqual(warm_names | cool_names, {
+            f"{zone}_{control}"
+            for zone in ("red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta")
+            for control in ("hue", "saturation", "lightness")
+        })
+
     def test_frontend_preview_and_registrations_exist(self):
         init_source = (PROJECT_ROOT / "__init__.py").read_text(encoding="utf-8")
         web_source = (PROJECT_ROOT / "web" / "lightroom_adjustment.js").read_text(encoding="utf-8")
         self.assertIn('"MiniMaxH3EasyLightroomImage": MiniMaxH3EasyLightroomImage', init_source)
         self.assertIn('"MiniMaxH3EasyLightroomVideo": MiniMaxH3EasyLightroomVideo', init_source)
+        self.assertIn('"MiniMaxH3EasyLightroomHSLWarm": MiniMaxH3EasyLightroomHSLWarm', init_source)
+        self.assertIn('"MiniMaxH3EasyLightroomHSLCool": MiniMaxH3EasyLightroomHSLCool', init_source)
         self.assertIn("h3_lightroom_preview", web_source)
         self.assertIn("renderPreview", web_source)
+        self.assertIn('temperature: "色温"', web_source)
 
 
 if __name__ == "__main__":
